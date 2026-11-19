@@ -98,6 +98,8 @@ export class Player {
     this.wishMag = mag < 0.08 ? 0 : mag;
     const fx = -Math.sin(camYaw), fz = -Math.cos(camYaw);
     const rx = -fz, rz = fx; // right = forward rotated -90deg about Y
+    this._fx = fx; this._fz = fz; this._rx = rx; this._rz = rz;
+    this._sx = mag > 1e-6 ? mx / mag : 0; this._sy = mag > 1e-6 ? my / mag : 0;
     this.wishWorld.set(rx * mx + fx * my, 0, rz * mx + fz * my);
     // steepness weight
     let w;
@@ -119,26 +121,37 @@ export class Player {
       g.lerp(c, w);
       if (g.lengthSq() > 1e-6) g.normalize();
     }
-    // Latching: while the stick is held, the direction of travel is carried across changes of
-    // surface (over a roof edge, from wall to ground...) instead of being re-read from the camera,
-    // and the stick steers relative to it. On flat ground it follows the camera as usual.
+    // The stick is read fresh every frame: up = up the tree / away from the camera.
+    // One exception: running over a convex edge of a building (roof edge onto the far wall) keeps
+    // the direction you were going, until you move the stick or reach flat ground; otherwise the
+    // squirrel would turn round at the edge.
     const ang = Math.atan2(my, mx);
     const L = this.latchDir;
-    if (!this.latchValid || g.lengthSq() < 1e-6) { L.copy(g); this.latchValid = g.lengthSq() > 1e-6; this.stickTravel = 9; }
-    else {
+    let keep = false;
+    if (this.latchValid && this.mode === 'surface' && this.prim && this.prim.type === 'box' && n.y < 0.9 && g.lengthSq() > 1e-6) {
       let da = ang - this.latchStick;
       if (da > Math.PI) da -= 2 * Math.PI; else if (da < -Math.PI) da += 2 * Math.PI;
       this.stickTravel += Math.abs(da);
       projectOnPlane(L, n);
-      if (L.lengthSq() < 1e-6) L.copy(g); else L.normalize();
-      if (da !== 0) L.applyAxisAngle(n, da * (n.y > 0.5 ? 1 : this.rightSign));
-      const agree = L.dot(g);
-      if (n.y > 0.9) {
-        if (agree > 0.2 || this.stickTravel > 0.6) { if (agree > 0.97 || this.stickTravel > 0.6) L.copy(g); else L.lerp(g, 0.25).normalize(); }
-      } else if (input.lookActive && agree > 0) L.lerp(g, 0.3).normalize();
+      if (L.lengthSq() > 1e-6) { L.normalize(); keep = this.stickTravel < 0.6 && L.dot(g) < 0.2 && !input.lookActive && n.x * fx + n.z * fz > -0.3; }
     }
+    if (!keep) { L.copy(g); this.latchValid = g.lengthSq() > 1e-6; }
     this.latchStick = ang;
     this.wishT.copy(L);
+  }
+
+  // How well a 3D direction matches the stick, as the player sees it: stick up means "up or away
+  // from the camera", stick right means "to the camera's right". Never inverts when the camera
+  // looks up from under a branch. Returns -1..1.
+  _score(dir) {
+    const sx = dir.x * this._rx + dir.z * this._rz;
+    const sy = dir.y + dir.x * this._fx + dir.z * this._fz;
+    const sl = Math.hypot(sx, sy);
+    const a3 = dir.dot(this.wishT);
+    if (sl < 0.15) return a3;
+    const a2 = (sx * this._sx + sy * this._sy) / sl;
+    const k = clamp((sl - 0.15) / 0.25, 0, 1);
+    return a3 + (a2 - a3) * k;
   }
 
   // carry heading and latched direction across a change of surface normal
@@ -209,13 +222,13 @@ export class Player {
     const moveDir = _x.copy(this.wishT);
     let faceOnly = false;
 
-    if (railLike && moveMag > 0) {
-      const ax = _y.set(prim.dx, prim.dy, prim.dz);
-      // fork assist: hop onto a touching limb that matches the stick better
-      if (this.forkCooldown <= 0) this._tryFork(moveDir, ax);
-      const pr = this.prim; ax.set(pr.dx, pr.dy, pr.dz);
-      const along = moveDir.dot(ax);
-      if (Math.abs(along) > 0.42) moveDir.copy(ax).multiplyScalar(along > 0 ? 1 : -1);
+    // fork assist: step onto a touching limb (or from a trunk onto a branch) that matches the stick better
+    if (isCap && moveMag > 0 && this.forkCooldown <= 0) this._tryFork();
+    const pr = this.prim;
+    if (pr && pr.type === 'capsule' && Math.abs(pr.dy) < 0.82 && moveMag > 0) {
+      const ax = _y.set(pr.dx, pr.dy, pr.dz);
+      const along = this._score(ax);
+      if (Math.abs(along) > 0.3) moveDir.copy(ax).multiplyScalar(along > 0 ? 1 : -1);
       else faceOnly = true;
     }
 
@@ -241,7 +254,8 @@ export class Player {
     if (!wantJump && input.jumpHeld && this.surfaceTime > 0.11 && moveMag > 0 && this.target.valid) wantJump = true;
     this._findTarget();
     // pushing the stick sideways off a limb, or onward at a tip, toward a perch: hop there without needing the button
-    if ((faceOnly || this.wasTip) && moveMag > 0.5 && this.target.valid) { this.pushTime = (this.pushTime || 0) + dt; if (this.pushTime > 0.24) wantJump = true; }
+    // (holding up never drops you to something lower: that felt like up turning into down)
+    if ((faceOnly || this.wasTip) && moveMag > 0.5 && this.target.valid && (this._sy < 0.3 || this.target.point.y > this.pos.y - 1.5)) { this.pushTime = (this.pushTime || 0) + dt; if (this.pushTime > 0.24) wantJump = true; }
     else this.pushTime = 0;
     if (wantJump && this.surfaceTime > 0.03) { this._jump(); return; }
 
@@ -257,12 +271,28 @@ export class Player {
         this.events.push({ type: 'fall' });
         return;
       }
-      const np = hit.prim;
-      // end caps of limbs: a tip. stop there.
+      // stay on the limb we are on (the one the fork choice picked) while it is still under the
+      // feet, even if a thicker limb it grows out of is a little closer
+      const cp = this.prim;
+      if (hit.prim !== cp && cp && cp.type === 'capsule') {
+        const h3 = this._hit3;
+        world.primDistance(cp, _p, h3);
+        if (h3.t > -0.02 && h3.t < 1.02 && h3.dist < hit.dist + 0.18 && h3.dist < 0.35) {
+          hit.prim = cp; hit.t = h3.t; hit.dist = h3.dist; hit.point.copy(h3.point); hit.normal.copy(h3.normal);
+        }
+      }
+      let np = hit.prim;
+      // end caps of limbs: a tip, unless another limb carries on from here. stop there.
       if (np.type === 'capsule' && (hit.t < 0 || hit.t > 1)) {
         const s = hit.t < 0 ? -1 : 1;
         const out = (hit.normal.x * np.dx + hit.normal.y * np.dy + hit.normal.z * np.dz) * s;
-        if (out > 0.55) { this.atTip = true; this.speed = 0; break; }
+        const headOut = (this.heading.x * np.dx + this.heading.y * np.dy + this.heading.z * np.dz) * s;
+        if (out > 0.55 || headOut > 0.5) {
+          const h3 = this._hit3, endPrim = np;
+          if (world.nearest(_p, 0.4, h3, (c) => c !== endPrim, true) && h3.dist < 0.22) {
+            hit.prim = h3.prim; hit.t = h3.t; hit.dist = h3.dist; hit.point.copy(h3.point); hit.normal.copy(h3.normal); np = h3.prim;
+          } else { this.atTip = true; this.speed = 0; break; }
+        }
       }
       // overhangs on boxes: try to scramble over, otherwise stop
       if (np.type === 'box' && hit.normal.y < -0.45) {
@@ -330,20 +360,30 @@ export class Player {
     return false;
   }
 
-  _tryFork(wish, ax) {
+  _tryFork() {
     const cur = this.prim, world = this.world, h = this._hit2;
     const t = this.primT;
-    const a0 = wish.dot(ax);
-    let curAlign = 0;
-    if (a0 > 0 && t < 0.97) curAlign = a0; else if (a0 < 0 && t > 0.03) curAlign = -a0;
-    let best = null, bestAlign = Math.max(0.5, curAlign + 0.18), bt = 0;
-    const self = this;
+    const onTrunk = Math.abs(cur.dy) >= 0.82;
+    let curAlign;
+    if (onTrunk) {
+      // on a trunk you can already go anywhere on its surface; only leave it for a branch that
+      // points clearly where the stick says, or once you reach the top
+      curAlign = t > 0.97 ? 0 : Math.max(0.4, this._score(_y.set(cur.dx, cur.dy, cur.dz)));
+    } else {
+      const a0 = this._score(_y.set(cur.dx, cur.dy, cur.dz));
+      curAlign = 0;
+      if (a0 > 0 && t < 0.97) curAlign = a0; else if (a0 < 0 && t > 0.03) curAlign = -a0;
+    }
+    let best = null, bestAlign = Math.max(curAlign > 0 ? 0.35 : 0.2, curAlign + 0.12), bt = 0;
+    const self = this, n = this.normal, dir = _z;
     world.queryPrims(this.pos.x, this.pos.z, 0.9, (c) => {
       if (c === cur || c.type !== 'capsule') return;
       if (self.pos.y < c.minY - 0.6 || self.pos.y > c.maxY + 0.6) return;
       world.primDistance(c, self.pos, h);
       if (h.dist > 0.8) return;
-      const d = wish.x * c.dx + wish.y * c.dy + wish.z * c.dz;
+      // never through the trunk we are on
+      if (onTrunk && (h.point.x - self.pos.x) * n.x + (h.point.y - self.pos.y) * n.y + (h.point.z - self.pos.z) * n.z < -0.2) return;
+      const d = self._score(dir.set(c.dx, c.dy, c.dz));
       let al = 0;
       if (d > 0 && h.t < 0.92) al = d; else if (d < 0 && h.t > 0.08) al = -d;
       if (al > bestAlign) { bestAlign = al; best = c; bt = h.t; }
