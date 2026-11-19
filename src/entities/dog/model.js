@@ -364,7 +364,7 @@ export class DogModel {
       const bone = sgn > 0 ? B.earL : B.earR, rst = sgn > 0 ? Rst.earL : Rst.earR;
       const tw = Math.sin(t * 1.3 + sgn) > 0.93 ? 0.2 : 0;
       if (K.ear === 'pointy') qe(_q, -earBack * 0.85 + s.alert * 0.1 + this.earFlop * floppy, sgn * (earBack * 0.3), -sgn * (0.12 + earBack * 0.35 - s.alert * 0.14 + tw));
-      else qe(_q, -earBack * 0.5 + this.earFlop * 0.5 * floppy, sgn * earBack * 0.25, sgn * (s.alert * 0.4 - earBack * 0.15 + tw + Math.abs(this.earFlop) * 0.4));
+      else qe(_q, -earBack * 0.5 + this.earFlop * 0.5 * floppy, sgn * earBack * 0.25, sgn * (s.alert * 0.12 - earBack * 0.15 + tw * 0.5 + Math.abs(this.earFlop) * 0.3));
       this._attach(bone, head, rst, Rst.head, _q);
     }
 

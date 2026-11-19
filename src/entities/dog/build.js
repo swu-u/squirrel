@@ -577,7 +577,7 @@ export function buildDog(kind) {
       tooth([sgn * mrx * 0.62, yM - mr * 0.3, zEnd - ml * 0.2], mr * 0.5, mr * 0.13, { head: 1 }, [0, -1, 0.1]);
       tooth([sgn * mrx * 0.3, yM - mr * 0.34, zEnd - ml * 0.05], mr * 0.22, mr * 0.1, { head: 1 }, [0, -1, 0.1]);
       if (bull) {
-        tooth([sgn * mrx * 0.56, jawY + mr * 0.12, jawLen - ml * 0.1], mr * 0.44, mr * 0.13, { jaw: 1 }, [0, 1, 0.12]);
+        tooth([sgn * mrx * 0.5, jawY + mr * 0.22, jawLen + ml * 0.13], mr * 0.62, mr * 0.15, { jaw: 1 }, [0, 1, 0.1]);
         tooth([sgn * mrx * 0.2, jawY + mr * 0.14, jawLen + ml * 0.0], mr * 0.2, mr * 0.1, { jaw: 1 }, [0, 1, 0.12]);
       } else tooth([sgn * mrx * 0.5, jawY + mr * 0.1, jawLen - ml * 0.2], mr * 0.42, mr * 0.11, { jaw: 1 }, [0, 1, 0.05]);
     }

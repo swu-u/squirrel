@@ -7,7 +7,7 @@
 // Dogs viewer. Query params:
 //   mode=sim (default) | pose        kind=terrier|shepherd|bulldog|all
 //   sim:  player=still|circle|trunk|run|none  px,pz (still position)  pr,ps (circle radius, speed)  t=seconds to pre-simulate
-//         cam=wide|dog|side|front|low|top  cd=camera distance  freeze=1 (stop after pre-sim)  hud=0
+//         cam=wide|dog|side|front|low|top  cd=camera distance  ca, ch (camera angle and height offsets)  live=1 (keep running in real time after the pre-sim)  hud=0  inv=1  hidden=1
 //   pose: pose=stand|walk|trot|gallop|turn|sit|lie|sniff|growl|bark|windup|lunge|skid|rear|hop|stun|flee|flinch|notice|pips  t=seconds  lt=lunge progress
 // window.debug: step(n), setPlayer({...}), hit(kind, i), state(), runTest()
 import * as THREE from 'three';
@@ -367,7 +367,7 @@ if (mode === 'pose') {
 }
 // deterministic pre-simulation, then real time (unless frozen)
 { const n = Math.round(num('t', 1.5) / DT); for (let i = 0; i < n; i++) { stepFn(); simTime += DT; } }
-const frozen = q.get('freeze') !== '0';
+const frozen = q.get('live') !== '1';
 let acc = 0, lastT = performance.now();
 renderer.setAnimationLoop((now) => {
   if (!frozen) { acc += Math.min(0.1, (now - lastT) / 1000); while (acc >= DT) { stepFn(); simTime += DT; acc -= DT; } }
