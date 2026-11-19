@@ -306,7 +306,8 @@ export function createDogs(scene, world, zones, opts = {}) {
       const tx = pl.hidden ? dog.lastX : pl.position.x, tz = pl.hidden ? dog.lastZ : pl.position.z;
       const td = Math.hypot(tx - p.x, tz - p.z);
       const facing = Math.abs(angDiff(Math.atan2(dx, dz), dog.yaw));
-      moveToward(dog, tx, tz, dog.maxSpeed, dt, high ? 0.9 : dog.radius + 0.25);
+      const left = moveToward(dog, tx, tz, dog.maxSpeed, dt, high ? 0.9 : dog.radius + 0.25);
+      if (left < (high ? 0.9 : dog.radius + 0.25) && dist > 0.05) turnToward(dog, Math.atan2(dx, dz), cfg.turn, dt);
       dog.barkT -= dt;
       if (dog.barkT <= 0) { dog.barkT = 1.1 + rng() * 1.2; doBark(dog); }
       // stuck against something for a while: give up
@@ -318,7 +319,7 @@ export function createDogs(scene, world, zones, opts = {}) {
       } else if (!pl.hidden) {
         if (cfg.charge && dog.chargeCd <= 0 && dist > 5 && dist < 10 && facing < 0.3 && lineFree(dog, p.x, p.z, p.x + (dx / dist) * (dist - 0.8), p.z + (dz / dist) * (dist - 0.8))) {
           setState(dog, 'chargeWindup'); emit('growl', dog, { charge: true });
-        } else if (dist < cfg.lungeRange && dog.lungeCd <= 0 && facing < 0.6) { setState(dog, 'windup'); emit('growl', dog, null); }
+        } else if (dist < cfg.lungeRange && dog.lungeCd <= 0 && facing < (dist < 1.2 ? 1.3 : 0.6)) { setState(dog, 'windup'); emit('growl', dog, null); }
       }
     } else if (st === 'windup') {
       c.crouch = 1; c.hackle = 1; lookAtPlayer();
@@ -336,7 +337,7 @@ export function createDogs(scene, world, zones, opts = {}) {
       c.leap = 1; c.leapT = tt; c.hackle = 1; lookAtPlayer();
       const v = (dog.lungeDist / dog.lungeDur) * (Math.PI / 2) * Math.sin(Math.PI * tt);
       dog.speed = v; dog.turnRate = 0; advance(dog, dt);
-      if (tt > 0.2 && hag < S * 1.2) tryBite(dog, pl, BITE_R);
+      if (tt > 0.2 && hag < S * 1.5) tryBite(dog, pl, BITE_R);
       if (tt >= 1 || (dog.blocked && dog.realSpeed < 1)) { dog.dur = cfg.recover; dog.speed = Math.min(dog.speed, 4.5); setState(dog, 'recover'); }
     } else if (st === 'recover') {
       const tt = dog.stateTime;
@@ -375,10 +376,10 @@ export function createDogs(scene, world, zones, opts = {}) {
           c.rearDist = clamp(S * 0.5 + (cl > 8 ? S * 0.3 : cl), S * 0.4, S * 0.95);
           // snap upwards when the squirrel is within reach
           dog.snapT -= dt;
-          if (dog.snapT <= 0 && hag < S * 1.5 + 0.6 && dist < 1.6) { dog.snapT = 1.2 + rng() * 0.6; dog.snapCheck = 0.3; dog.bit = false; dog.model.hop(0.3); emit('lunge', dog, { up: true }); }
+          if (dog.snapT <= 0 && hag < S * 1.5 + 0.5 && dist < 1.8) { dog.snapT = 1.2 + rng() * 0.6; dog.snapCheck = 0.3; dog.bit = false; dog.model.hop(0.3); emit('lunge', dog, { up: true }); }
         }
       }
-      if (dog.snapCheck > 0) { dog.snapCheck -= dt; c.jaw = 0.8; if (dog.snapCheck < 0.2 && hag < S * 1.5 + 0.35) tryBite(dog, pl, BITE_R); }
+      if (dog.snapCheck > 0) { dog.snapCheck -= dt; c.jaw = 0.8; if (dog.snapCheck < 0.22 && hag < S * 1.5 + 0.05) tryBite(dog, pl, BITE_R + 0.1); }
       // bark in bursts: woof woof (woof) ... pause
       dog.barkT -= dt;
       if (dog.barkT <= 0 && dog.snapCheck <= 0) {

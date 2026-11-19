@@ -311,7 +311,8 @@ async function boot() {
     if (playing && input.attackPressed && attackCd <= 0 && player.stun <= 0) doAttack();
     if (dogs) {
       dogCtx.time = time; dogCtx.player.heightAboveGround = player.heightAboveGround; dogCtx.player.hidden = player.hidden; dogCtx.player.invulnerable = player.invuln > 0 || respawning || mode !== 'play';
-      dogs.update(dt, dogCtx);
+      try { dogs.update(dt, dogCtx); } catch (err) { console.error('dogs update failed, turning dogs off', err); for (const d of dogs.list) d.alive = false; if (dogs.group) dogs.group.visible = false; dogs = null; }
+      if (dogs)
       if (player.mode === 'air' && player.vel.y < -1.5) {
         for (const d of dogs.list) {
           if (!d.alive || d.stunned) continue;

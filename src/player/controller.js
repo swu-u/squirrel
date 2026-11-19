@@ -240,6 +240,9 @@ export class Player {
     let wantJump = this.jumpBuffer > 0;
     if (!wantJump && input.jumpHeld && this.surfaceTime > 0.11 && moveMag > 0 && this.target.valid) wantJump = true;
     this._findTarget();
+    // pushing the stick sideways off a limb, or onward at a tip, toward a perch: hop there without needing the button
+    if ((faceOnly || this.wasTip) && moveMag > 0.5 && this.target.valid) { this.pushTime = (this.pushTime || 0) + dt; if (this.pushTime > 0.24) wantJump = true; }
+    else this.pushTime = 0;
     if (wantJump && this.surfaceTime > 0.03) { this._jump(); return; }
 
     // move in small steps, re-projecting onto the nearest surface each step
@@ -284,6 +287,7 @@ export class Player {
       // settle (drift to the top of a limb even while standing)
       if (world.nearest(this.pos, 0.5, hit)) { _n0.copy(this.normal); this._attach(hit, dt); this._transport(_n0, this.normal); }
     }
+    this.wasTip = this.atTip;
     if (this.atTip && input.jumpHeld && moveMag > 0) { this._findTarget(); if (this.target.valid) { this._jump(); return; } }
     this.vel.copy(this.heading).multiplyScalar(this.speed);
   }
@@ -338,7 +342,7 @@ export class Player {
       if (c === cur || c.type !== 'capsule') return;
       if (self.pos.y < c.minY - 0.6 || self.pos.y > c.maxY + 0.6) return;
       world.primDistance(c, self.pos, h);
-      if (h.dist > 0.34) return;
+      if (h.dist > 0.8) return;
       const d = wish.x * c.dx + wish.y * c.dy + wish.z * c.dz;
       let al = 0;
       if (d > 0 && h.t < 0.92) al = d; else if (d < 0 && h.t > 0.08) al = -d;

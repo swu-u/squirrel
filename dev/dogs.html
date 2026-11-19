@@ -1,0 +1,346 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dogs viewer</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#222}canvas{display:block}
+#hud{position:fixed;left:8px;top:6px;font:12px/1.35 ui-monospace,Menlo,monospace;color:#fff;text-shadow:0 1px 2px #000;white-space:pre;pointer-events:none}</style></head><body>
+<div id="hud"></div>
+<script type="module">
+// Dogs viewer. Query params:
+//   mode=sim (default) | pose        kind=terrier|shepherd|bulldog|all
+//   sim:  player=still|circle|trunk|run|none  px,pz (still position)  pr,ps (circle radius, speed)  t=seconds to pre-simulate
+//         cam=wide|dog|side|front|low|top  cd=camera distance  freeze=1 (stop after pre-sim)  hud=0
+//   pose: pose=stand|walk|trot|gallop|turn|sit|lie|sniff|growl|bark|windup|lunge|skid|rear|hop|stun|flee|flinch|notice|pips  t=seconds  lt=lunge progress
+// window.debug: step(n), setPlayer({...}), hit(kind, i), state(), runTest()
+import * as THREE from 'three';
+import { setupEnvironment, PALETTE } from '../src/world/env.js';
+import { World } from '../src/core/world.js';
+import { createDogs } from '../src/entities/dogs.js';
+import { DogModel } from '../src/entities/dog/model.js';
+import { createSignals } from '../src/entities/dog/signals.js';
+import { KINDS } from '../src/entities/dog/build.js';
+
+const q = new URLSearchParams(location.search);
+const num = (k, d) => (q.has(k) ? +q.get(k) : d);
+const DT = 1 / 60;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight); document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(num('fov', 42), innerWidth / innerHeight, 0.05, 600);
+const env = setupEnvironment(scene, renderer, { shadowRange: num('sr', 16) });
+const hud = document.getElementById('hud');
+
+const groundFn = (x, z) => 0.3 * Math.sin(x * 0.16) * Math.cos(z * 0.13) + 0.12 * Math.sin(x * 0.41 + z * 0.37);
+const TRUNK = { x: 2.5, z: 3.5, h: 3, r: 0.32 };
+
+/** collision world + matching visuals (visuals only when a scene is given) */
+function makeArena(sc) {
+  const world = new World();
+  world.setGroundHeightFn(groundFn);
+  const obstacles = [];
+  const barkMat = new THREE.MeshStandardMaterial({ color: PALETTE.bark, roughness: 1 });
+  const box = (x, z, hx, hy, hz, rot, color, kind = 'prop') => {
+    const y = groundFn(x, z) + hy - 0.15;
+    world.addBox({ x, y, z }, { x: hx, y: hy, z: hz }, rot, { kind });
+    obstacles.push({ type: 'box', x, z, hx, hz, rot });
+    if (sc) { const m = new THREE.Mesh(new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2), new THREE.MeshStandardMaterial({ color, roughness: 0.85 })); m.position.set(x, y, z); m.rotation.y = rot; m.castShadow = m.receiveShadow = true; sc.add(m); }
+  };
+  const trunk = (x, z, h, r, kind = 'trunk') => {
+    const y = groundFn(x, z) - 0.2;
+    world.addCapsule({ x, y, z }, { x, y: y + h + 0.2, z }, r, r * 0.9, { kind });
+    obstacles.push({ type: 'trunk', x, z, r });
+    if (sc) { const m = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.9, r, h + 0.2, 20), barkMat); m.position.set(x, y + (h + 0.2) / 2, z); m.castShadow = m.receiveShadow = true; sc.add(m); }
+  };
+  box(5.5, -2, 1.1, 0.8, 1.1, 0.4, PALETTE.brick[1]);
+  box(-5, -4, 3, 1.1, 0.25, -0.3, PALETTE.brick[3], 'fence');
+  box(-4.5, 4.5, 0.9, 0.5, 0.5, 0.9, PALETTE.brick[5]);
+  box(0, -9, 4, 1.6, 0.6, 0.0, PALETTE.brick[0], 'building');
+  trunk(TRUNK.x, TRUNK.z, TRUNK.h, TRUNK.r);
+  trunk(-2.5, -1.5, 7, 0.4);
+  trunk(1.5, -5, 6, 0.3);
+  trunk(7, 4, 5, 0.12, 'pole');
+  if (sc) {
+    const geo = new THREE.PlaneGeometry(160, 160, 128, 128); geo.rotateX(-Math.PI / 2);
+    const pa = geo.attributes.position;
+    for (let i = 0; i < pa.count; i++) pa.setY(i, groundFn(pa.getX(i), pa.getZ(i)));
+    geo.computeVertexNormals();
+    const g = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: PALETTE.grass, roughness: 1 })); g.receiveShadow = true; sc.add(g);
+  }
+  return { world, obstacles };
+}
+function makeZones(kind) {
+  const kinds = kind === 'all' ? ['terrier', 'shepherd', 'bulldog'] : [kind];
+  return kinds.map((k, i) => ({ center: new THREE.Vector3(kinds.length > 1 ? (i - 1) * 3 : 0, 0, 0), radius: num('zr', 9), kind: k, name: k + ' yard' }));
+}
+function makePlayer() {
+  return { position: new THREE.Vector3(30, 0, 0), velocity: new THREE.Vector3(), heightAboveGround: 0, hidden: false, invulnerable: false,
+    script: { mode: 'still', x: 30, z: 0, y: 0, r: 6, speed: 8, a: 0 } };
+}
+function stepPlayer(pl, dt, world) {
+  const s = pl.script, p = pl.position, ox = p.x, oz = p.z;
+  if (s.mode === 'still') { p.x = s.x; p.z = s.z; pl.heightAboveGround = s.y || 0; }
+  else if (s.mode === 'circle') { s.a += (s.speed / s.r) * dt; p.x = Math.cos(s.a) * s.r; p.z = Math.sin(s.a) * s.r; pl.heightAboveGround = 0; }
+  else if (s.mode === 'trunk') { p.x = TRUNK.x; p.z = TRUNK.z; pl.heightAboveGround = s.y || TRUNK.h; }
+  else if (s.mode === 'run') { p.x += s.vx * dt; p.z += s.vz * dt; pl.heightAboveGround = 0; }
+  p.y = world.groundHeight(p.x, p.z) + pl.heightAboveGround;
+  pl.velocity.set((p.x - ox) / dt, 0, (p.z - oz) / dt);
+  if (pl.velocity.length() > 40) pl.velocity.set(0, 0, 0);
+}
+
+// ------------------------------------------------------------------ headless behaviour test
+async function runTest(kind = 'terrier') {
+  const { world } = makeArena(null);
+  const zone = { center: new THREE.Vector3(0, 0, 0), radius: 9, kind, name: 'test' };
+  const sys = createDogs(new THREE.Scene(), world, [zone], { seed: 7, respawnTime: 40 });
+  const dog = sys.list[0], pl = makePlayer();
+  const log = [], events = [], checks = [];
+  let time = 0, frames = 0, last = dog.state, minClear = 9, maxZone = 0, bites = 0;
+  const ev = (type, d, data) => { events.push({ t: +time.toFixed(2), type, data: data && data.damage ? { damage: data.damage } : data ? Object.keys(data).join(',') : undefined }); if (type === 'bite') bites++; };
+  const hitTmp = { dist: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(), prim: null, t: 0 };
+  const solid = (pr) => pr.type === 'box' || pr.kind === 'trunk' || pr.kind === 'pole';
+  const pt = new THREE.Vector3();
+  const step = (n, each) => {
+    for (let i = 0; i < n; i++) {
+      if (each) each();
+      stepPlayer(pl, DT, world);
+      sys.update(DT, { time, player: pl, onEvent: ev });
+      time += DT; frames++;
+      if (dog.state !== last) { log.push({ t: +time.toFixed(2), from: last, to: dog.state }); last = dog.state; }
+      if (dog.state !== 'away') {
+        pt.set(dog.position.x, dog.position.y + dog.shoulder * 0.6, dog.position.z);
+        const h = world.nearest(pt, 3, hitTmp, solid, true);
+        if (h) minClear = Math.min(minClear, h.dist);
+        if (Math.abs(dog.position.y - world.groundHeight(dog.position.x, dog.position.z)) > 1e-6) checks.push({ name: 'on ground', ok: false });
+        if (dog.alive) maxZone = Math.max(maxZone, Math.hypot(dog.position.x - zone.center.x, dog.position.z - zone.center.z));
+      }
+    }
+  };
+  const until = (pred, maxFrames, each) => { let n = 0; while (!pred() && n < maxFrames) { step(1, each); n++; } return n < maxFrames; };
+  const seen = (from, to, after = 0) => log.find((l) => l.t >= after && (!from || l.from === from) && l.to === to);
+  const check = (name, ok, info) => checks.push({ name, ok: !!ok, info });
+  const front = (d) => { pl.script.mode = 'still'; pl.script.x = dog.position.x + Math.sin(dog.yaw) * d; pl.script.z = dog.position.z + Math.cos(dog.yaw) * d; pl.script.y = 0; };
+
+  // 1. patrol alone for 25 s
+  step(1500);
+  check('patrols and pauses without the squirrel', log.length === 0 && dog.state === 'patrol');
+  // 2. hidden squirrel right in front is not noticed
+  pl.hidden = true; front(4); step(120);
+  check('hidden squirrel is ignored', dog.state === 'patrol');
+  pl.hidden = false; pl.script.x = 30; pl.script.z = 0; step(30);
+  // 3. squirrel behind at 9 m is outside the cone; in front at 9 m is noticed
+  pl.script.x = dog.position.x - Math.sin(dog.yaw) * 9; pl.script.z = dog.position.z - Math.cos(dog.yaw) * 9;
+  let t0 = time; step(8);
+  const behindNoticed = dog.state !== 'patrol';
+  pl.script.x = 30; step(20);
+  check('squirrel 9 m behind is not noticed at once', !behindNoticed);
+  // high squirrel at 9 m in front: only noticed half as far
+  front(9); pl.script.y = 4; step(40);
+  check('high squirrel at 9 m is not noticed', dog.state === 'patrol');
+  // put the squirrel in an open spot 6 m in front
+  pl.invulnerable = true; front(6); t0 = time;
+  const noticed = until(() => dog.state === 'notice', 240, () => { if (dog.state === 'patrol') front(6); });
+  const tn = time;
+  until(() => dog.state === 'chase', 120);
+  check('notice then chase after about 0.5 s', noticed && Math.abs(time - tn - 0.5) < 0.1, { noticeToChase: +(time - tn).toFixed(2) });
+  check('notice event fired', events.some((e) => e.type === 'notice'));
+  // 4. invulnerable squirrel standing still: wind-up, lunge, recover, no bite
+  until(() => dog.state === 'windup', 600); const tw = time;
+  until(() => dog.state === 'lunge', 60); const tl = time; const lx = dog.position.x, lz = dog.position.z;
+  until(() => dog.state === 'recover', 60); const tr = time; const ld = Math.hypot(dog.position.x - lx, dog.position.z - lz);
+  until(() => dog.state !== 'recover', 200); const te = time;
+  check('wind-up telegraph is 0.35 s', Math.abs(tl - tw - 0.35) < 0.04, { windup: +(tl - tw).toFixed(2) });
+  check('lunge covers 2 to 3 m fast', ld > 1.7 && ld < 3.2 && tr - tl < 0.3, { dist: +ld.toFixed(2), dur: +(tr - tl).toFixed(2) });
+  check('recover opening is about 0.9 s', Math.abs(te - tr - (kind === 'bulldog' ? 1.0 : 0.9)) < 0.08, { recover: +(te - tr).toFixed(2) });
+  check('no bite while invulnerable', bites === 0);
+  // 5. vulnerable squirrel standing still gets bitten
+  pl.invulnerable = false; const b0 = bites;
+  until(() => bites > b0, 900, () => { if (kind === 'bulldog' && dog.state === 'chargeWindup') check('bulldog charges', true); });
+  const be = events.filter((e) => e.type === 'bite').pop();
+  check('bite connects on a still squirrel', bites > b0 && be && be.data.damage === (kind === 'bulldog' ? 2 : 1), be);
+  pl.invulnerable = true;
+  // 6. nut interrupts a wind-up
+  until(() => dog.state === 'windup', 900); step(6);
+  const h0 = dog.health; dog.hit(1, new THREE.Vector3(-Math.sin(dog.yaw), 0, -Math.cos(dog.yaw)), 'nut');
+  check('nut interrupts the wind-up with a stagger', dog.state === 'stagger' && dog.health === h0 - 1);
+  const ts = time; until(() => dog.state !== 'stagger', 120);
+  check('nut stagger lasts 0.6 s', Math.abs(time - ts - 0.6) < 0.05, { stagger: +(time - ts).toFixed(2) });
+  // 7. treeing: squirrel on top of the 3 m trunk
+  dog.health = dog.maxHealth;
+  pl.script.mode = 'trunk'; pl.script.y = 3; const e0 = events.length; t0 = time;
+  const treed = until(() => dog.state === 'tree', 900);
+  step(360);
+  const barks = events.slice(e0).filter((e) => e.type === 'bark').length;
+  check('goes under the squirrel and trees it', treed && dog.state === 'tree' && Math.hypot(dog.position.x - 2.5, dog.position.z - 3.5) < 3, { dist: +Math.hypot(dog.position.x - 2.5, dog.position.z - 3.5).toFixed(2) });
+  check('barks in rhythm while treeing', barks >= 6, { barks });
+  check('rears up against the trunk', dog.model.s.rear > 0.8);
+  // low on the trunk within reach: snaps up and bites
+  pl.invulnerable = false; pl.script.y = Math.max(1.45, 1.5 * dog.shoulder - 0.08); const b1 = bites;
+  const canReach = 1.5 * dog.shoulder > 1.45;
+  until(() => bites > b1, 600);
+  check(canReach ? 'snaps up to about 1.5 shoulder heights and bites' : 'cannot reach a squirrel above 1.5 shoulder heights', (bites > b1) === canReach, { at: +pl.script.y.toFixed(2), state: dog.state });
+  pl.script.y = 1.5 * dog.shoulder + 0.4; const b2 = bites; step(420);
+  check('squirrel just above reach is safe', bites === b2, { at: +pl.script.y.toFixed(2) });
+  pl.invulnerable = true;
+  // squirrel climbs above 9 m: the dog gives up
+  pl.script.y = 10; const gave = until(() => dog.state === 'return', 300);
+  check('gives up when the squirrel is over 9 m up', gave);
+  until(() => dog.state === 'patrol', 1200);
+  check('walks back to patrol', dog.state === 'patrol');
+  // 8. leash: squirrel runs away in a straight line at 8 m/s
+  front(5); until(() => dog.state === 'chase', 400, () => { if (dog.state === 'patrol') front(5); });
+  pl.script.mode = 'run'; const a = Math.atan2(pl.position.x, pl.position.z); pl.script.vx = Math.sin(a) * 8; pl.script.vz = Math.cos(a) * 8; maxZone = 0;
+  const ret = until(() => dog.state === 'return', 900);
+  check('gives up the chase near 1.5 times the zone radius', ret && maxZone < zone.radius * 1.5 + 1.5, { maxDistFromZone: +maxZone.toFixed(2) });
+  until(() => dog.state === 'patrol', 1500);
+  // 9. pounce stuns for 2 s, scratch knocks back, beaten dog yelps and flees, then returns calm
+  front(5); pl.script.mode = 'still'; until(() => dog.state === 'chase', 400, () => { if (dog.state === 'patrol') front(5); });
+  dog.health = dog.maxHealth;
+  if (dog.maxHealth > 2) {
+    dog.hit(2, new THREE.Vector3(0, -1, 0), 'pounce'); const t1 = time;
+    check('pounce stuns', dog.state === 'stunned' && dog.stunned);
+    until(() => dog.state !== 'stunned', 200);
+    check('stun lasts 2 s', Math.abs(time - t1 - 2) < 0.06, { stun: +(time - t1).toFixed(2) });
+  }
+  until(() => dog.state === 'recover', 900); step(10);
+  const kx = dog.position.x, kz = dog.position.z;
+  dog.health = Math.max(dog.health, 2);
+  dog.hit(1, new THREE.Vector3(-Math.sin(dog.yaw), 0, -Math.cos(dog.yaw)), 'scratch'); step(20);
+  check('scratch knocks the dog back', Math.hypot(dog.position.x - kx, dog.position.z - kz) > 0.4 && dog.state === 'stagger', { knock: +Math.hypot(dog.position.x - kx, dog.position.z - kz).toFixed(2) });
+  const e1 = events.length; const tf = time;
+  dog.hit(dog.health, new THREE.Vector3(-Math.sin(dog.yaw), 0, -Math.cos(dog.yaw)), dog.maxHealth > 2 ? 'pounce' : 'scratch');
+  const ee = events.slice(e1).map((e) => e.type);
+  check('beaten: yelp then flee, not alive', ee.indexOf('yelp') >= 0 && ee.indexOf('flee') > ee.indexOf('yelp') && !dog.alive && dog.state === 'flee', ee);
+  check('hits on a fleeing dog are ignored', dog.hit(1, null, 'nut') === false);
+  until(() => dog.state === 'away', 400);
+  check('runs off and fades out', dog.state === 'away' && !dog.group.visible, { fleeTime: +(time - tf).toFixed(2) });
+  pl.script.x = 40; pl.script.z = 40;
+  until(() => dog.state === 'patrol', 3000);
+  check('comes back after about 40 s, calm', dog.alive && dog.calm && dog.health === dog.maxHealth && Math.abs(time - tf - 43.4) < 1.5, { after: +(time - tf).toFixed(1) });
+  step(600);
+  check('never inside an obstacle', minClear > dog.radius - 0.08, { minClearance: +minClear.toFixed(3), radius: dog.radius });
+  const failed = checks.filter((c) => !c.ok);
+  return { kind, frames, simSeconds: +time.toFixed(1), passed: checks.length - failed.length, failed: failed.length, checks, transitions: log, events: events.length > 90 ? events.slice(0, 90) : events, eventCount: events.length };
+}
+
+// ------------------------------------------------------------------ viewer
+const mode = q.get('mode') || 'sim';
+const kind = q.get('kind') || 'shepherd';
+const marker = new THREE.Group();
+{
+  const m = new THREE.MeshStandardMaterial({ color: 0xb5562a, roughness: 0.8 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.33, 6, 14), m); body.rotation.x = Math.PI / 2; body.position.y = 0.11;
+  const tail = new THREE.Mesh(new THREE.CapsuleGeometry(0.07, 0.3, 6, 12), m); tail.position.set(0, 0.3, -0.3); tail.rotation.x = -0.5;
+  body.castShadow = tail.castShadow = true; marker.add(body, tail); scene.add(marker);
+}
+let simTime = 0, focus = new THREE.Vector3(), follow = null, stepFn = () => {}, hudFn = () => '';
+const camMode = q.get('cam') || 'dog', cd = num('cd', 0), ca = num('ca', 0), chh = num('ch', 0);
+function placeCamera() {
+  const t = follow ? follow.position : focus;
+  const yaw = follow ? follow.rotation.y : 0;
+  const S = follow && follow.userData.S ? follow.userData.S : 1;
+  const look = new THREE.Vector3(t.x, t.y + S * 0.7, t.z);
+  let d = cd || S * 4.2, a = yaw, h = S * 1.0;
+  if (camMode === 'side') a = yaw + Math.PI / 2;
+  else if (camMode === 'front') a = yaw + 0.25;
+  else if (camMode === 'back') a = yaw + Math.PI - 0.5;
+  else if (camMode === 'dog') a = yaw + 0.9;
+  else if (camMode === 'low') { a = yaw + 0.35; h = 0.25; d = cd || S * 3.2; }
+  else if (camMode === 'top') { h = d * 1.6; a = 0; }
+  else if (camMode === 'wide') { look.set(0, 1, 0); d = cd || 22; h = 9; a = 0.5; }
+  a += ca; h += chh;
+  camera.position.set(look.x + Math.sin(a) * d, (camMode === 'wide' ? 0 : t.y) + h, look.z + Math.cos(a) * d);
+  if (q.has('ly')) look.y = t.y + num('ly', 0);
+  camera.lookAt(look);
+  focus.copy(look);
+}
+
+if (mode === 'pose') {
+  const { world } = makeArena(q.get('flat') === '0' ? scene : null);
+  const flat = q.get('flat') !== '0';
+  if (flat) { const g = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), new THREE.MeshStandardMaterial({ color: PALETTE.grass, roughness: 1 })); g.rotation.x = -Math.PI / 2; g.receiveShadow = true; scene.add(g); }
+  const kinds = kind === 'all' ? ['terrier', 'shepherd', 'bulldog'] : [kind];
+  const pose = q.get('pose') || 'stand';
+  const dogs = kinds.map((k, i) => {
+    const m = new DogModel(k, 3 + i); m.ground = flat ? () => 0 : groundFn;
+    m.group.position.set((i - (kinds.length - 1) / 2) * 2.2, 0, 0); m.group.userData.S = m.d.S;
+    const sig = createSignals(m.d.S, KINDS[k].health); m.group.add(sig.group);
+    scene.add(m.group);
+    return { m, sig, k };
+  });
+  follow = dogs[Math.floor(dogs.length / 2)].m.group;
+  marker.position.set(dogs[dogs.length - 1].m.group.position.x + 1.3, 0, 1.2);
+  const P = {
+    stand: {}, walk: { v: 0.2 }, trot: { v: 0.42 }, gallop: { v: 1 }, turn: { v: 0.75, turn: 2.6 }, sit: { sit: 1, pant: 0.8 }, lie: { lie: 1 }, sniff: { sniff: 1 },
+    growl: { growl: 1, hackle: 1 }, bark: { alert: 1, bark: 1 }, windup: { crouch: 1, hackle: 1 }, lunge: { leap: 1, hackle: 1, vabs: 10 }, skid: { skid: 1, pant: 0.5 },
+    rear: { rear: 1, scrabble: 1, alert: 1, lookUp: 1 }, hop: { rear: 1, scrabble: 1, alert: 1, lookUp: 1, hop: 1 }, stun: { stun: 1, stars: 1 }, flee: { v: 1.05, fear: 1 }, flinch: { flinch: 1 },
+    notice: { alert: 1, bark: 1, excl: 1, hackle: 0.4 }, pips: { growl: 0.3, pips: 1 }, pant: { pant: 1, wag: 1 }, alert: { alert: 1 },
+  }[pose] || {};
+  let n = 0;
+  stepFn = () => {
+    for (const { m, sig, k } of dogs) {
+      const c = m.c, K = KINDS[k];
+      for (const key of ['sit', 'lie', 'sniff', 'growl', 'alert', 'crouch', 'leap', 'skid', 'rear', 'scrabble', 'stun', 'fear', 'pant', 'wag', 'hackle']) c[key] = P[key] || 0;
+      const v = P.vabs || (P.v || 0) * K.maxSpeed;
+      c.speed = v; c.turn = P.turn || 0; c.leapT = num('lt', 0.5); c.rearDist = num('rd', 0.6) * K.S;
+      m.group.rotation.y += c.turn * DT;
+      m.group.position.x += Math.sin(m.group.rotation.y) * v * DT; m.group.position.z += Math.cos(m.group.rotation.y) * v * DT;
+      m.group.position.y = m.ground(m.group.position.x, m.group.position.z);
+      if (P.lookUp) { c.look.set(m.group.position.x + Math.sin(m.group.rotation.y) * 0.5, m.group.position.y + 3, m.group.position.z + Math.cos(m.group.rotation.y) * 0.5); c.lookW = 1; }
+      else if (q.has('look')) { c.look.copy(marker.position); c.look.y += 0.15; c.lookW = 1; }
+      const tEnd = num('t', 1.5);
+      if (P.bark && Math.abs(simTime - (tEnd - num('bt', 0.11))) < DT / 2) m.bark();
+      if (P.hop && Math.abs(simTime - (tEnd - 0.18)) < DT / 2) m.hop(0.3);
+      if (P.flinch && Math.abs(simTime - (tEnd - 0.1)) < DT / 2) m.flinch(-Math.sin(m.group.rotation.y) + 0.6, -Math.cos(m.group.rotation.y), 1.2);
+      if (P.excl && Math.abs(simTime - (tEnd - 0.3)) < DT / 2) sig.notice();
+      if (P.stars) sig.setStun(true);
+      if (P.pips && n === 0) sig.setHealth(Math.ceil(K.health / 2), true);
+      m.update(DT, simTime);
+      sig.update(DT, m.headTopLocal);
+    }
+    n++;
+  };
+  window.debug = { dogs, step: (k = 1) => { for (let i = 0; i < k; i++) { stepFn(); simTime += DT; } }, runTest };
+} else {
+  const { world } = makeArena(scene);
+  const zones = makeZones(kind);
+  const sys = createDogs(scene, world, zones, { seed: num('seed', 3) });
+  const pl = makePlayer();
+  const pm = q.get('player') || 'still';
+  Object.assign(pl.script, { mode: pm === 'none' ? 'still' : pm, x: num('px', pm === 'none' ? 60 : 5), z: num('pz', 0), y: num('py', 0), r: num('pr', 6), speed: num('ps', 8) });
+  if (pm === 'trunk') pl.script.y = num('py', 3);
+  pl.invulnerable = q.get('inv') === '1'; pl.hidden = q.get('hidden') === '1';
+  const evlog = [];
+  const ctx = { time: 0, player: pl, camera, onEvent: (type, dog, data) => { evlog.push(simTime.toFixed(2) + ' ' + dog.name + ' ' + type + (data && data.damage ? ' dmg ' + data.damage : '')); if (evlog.length > 7) evlog.shift(); } };
+  for (const d of sys.list) d.group.userData.S = d.shoulder;
+  follow = sys.list[num('f', 0)].group;
+  stepFn = () => {
+    stepPlayer(pl, DT, world);
+    ctx.time = simTime;
+    sys.update(DT, ctx);
+    marker.position.copy(pl.position);
+    if (pl.velocity.lengthSq() > 0.01) marker.rotation.y = Math.atan2(pl.velocity.x, pl.velocity.z);
+  };
+  hudFn = () => sys.list.map((d) => `${d.name}: ${d.state} ${d.stateTime.toFixed(1)}s  hp ${d.health}/${d.maxHealth}${d.calm ? ' calm' : ''}${d.alive ? '' : ' (beaten)'}  v ${d.realSpeed.toFixed(1)}`).join('\n') + '\n' + evlog.join('\n');
+  window.debug = {
+    sys, pl, world, runTest,
+    step: (k = 1) => { for (let i = 0; i < k; i++) { stepFn(); simTime += DT; } },
+    setPlayer: (o) => Object.assign(pl.script, o),
+    hit: (hk = 'nut', i = 0, dmg) => { const d = sys.list[i]; return d.hit(dmg ?? (hk === 'pounce' ? 2 : 1), new THREE.Vector3(-Math.sin(d.yaw), 0, -Math.cos(d.yaw)), hk); },
+    state: () => sys.list.map((d) => ({ name: d.name, state: d.state, health: d.health, x: +d.position.x.toFixed(2), z: +d.position.z.toFixed(2) })),
+    info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, dogTris: sys.list.map((d) => d.model.b.triCount) }),
+    /** step until dog i is in the given state (max seconds), returns whether it got there */
+    until: (state, maxS = 20, i = 0) => { let k = 0; while (sys.list[i].state !== state && k < maxS * 60) { stepFn(); simTime += DT; k++; } return sys.list[i].state === state; },
+  };
+}
+// deterministic pre-simulation, then real time (unless frozen)
+{ const n = Math.round(num('t', 1.5) / DT); for (let i = 0; i < n; i++) { stepFn(); simTime += DT; } }
+const frozen = q.get('freeze') !== '0';
+let acc = 0, lastT = performance.now();
+renderer.setAnimationLoop((now) => {
+  if (!frozen) { acc += Math.min(0.1, (now - lastT) / 1000); while (acc >= DT) { stepFn(); simTime += DT; acc -= DT; } }
+  lastT = now;
+  placeCamera();
+  env.update(focus, simTime);
+  if (q.get('hud') !== '0') hud.textContent = hudFn();
+  renderer.render(scene, camera);
+});
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+</script></body></html>
