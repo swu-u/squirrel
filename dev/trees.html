@@ -1,0 +1,204 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trees viewer</title>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#222}canvas{display:block}
+#info{position:fixed;left:8px;top:8px;font:12px/1.4 system-ui,sans-serif;color:#fff;text-shadow:0 1px 2px #000;white-space:pre;pointer-events:none}</style></head><body>
+<div id="info"></div>
+<script type="module">
+// Trees viewer.
+//   ?type=oak|maple|birch|pine|street   one tree          ?layout=row | grove | stress (70 trees)
+//   ?view=far|mid|under|inside|top      camera preset     ?perch=3 (which perch for the inside view)  ?ang=0 (orbit, degrees)
+//   ?caps=1  collision capsules as wireframe   ?quality=0.6   ?seed=7   ?bare=1 (hide leaves)   ?nofocus=1   ?hud=0
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { setupEnvironment, PALETTE, SUN_DIR } from '../src/world/env.js';
+import { World } from '../src/core/world.js';
+import { mulberry32 } from '../src/core/rng.js';
+import { createTrees } from '../src/world/trees.js';
+
+const q = new URLSearchParams(location.search);
+const num = (k, d) => (q.has(k) ? +q.get(k) : d);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2)); renderer.setSize(innerWidth, innerHeight); document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.08, 2000);
+const env = setupEnvironment(scene, renderer);
+
+// grass
+function grassTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d');
+  x.fillStyle = '#fff'; x.fillRect(0, 0, 256, 256);
+  const r = mulberry32(5);
+  for (let i = 0; i < 5000; i++) { const v = 200 + r() * 55 | 0; x.fillStyle = `rgb(${v - 20 * r() | 0},${v},${v - 40 * r() | 0})`; x.fillRect(r() * 256, r() * 256, 1 + r() * 2, 2 + r() * 5); }
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(160, 160); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
+}
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(800, 800), new THREE.MeshStandardMaterial({ color: PALETTE.grass, map: grassTexture(), roughness: 1 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+
+// layout
+const world = new World();
+const seed = num('seed', 7), rng = mulberry32(seed * 977 + 3);
+const layout = q.get('layout') || (q.get('type') ? 'single' : 'row');
+const TYPES = ['oak', 'maple', 'birch', 'pine', 'street'];
+let specs = [];
+if (layout === 'single') specs = [{ x: 0, z: 0, type: q.get('type') || 'oak', seed, scale: num('scale', 1) }];
+else if (layout === 'row') specs = TYPES.map((type, i) => ({ x: (i - 2) * 17, z: 0, type, seed: seed + i }));
+else if (layout === 'grove') {
+  const pts = [[0, 0, 'oak'], [15, 6, 'maple'], [-13, 9, 'birch'], [-17, -8, 'maple'], [9, -15, 'oak'], [27, -6, 'pine'], [-4, 22, 'birch'], [22, 20, 'street'], [-28, 4, 'pine'], [-9, -24, 'street'], [33, 10, 'oak'], [4, 36, 'maple']];
+  specs = pts.map(([x, z, type], i) => ({ x, z, type, seed: seed + i * 3, scale: 0.9 + rng() * 0.25 }));
+} else { // stress: 70 trees over the 240 m park
+  const bag = [];
+  const mix = { oak: 20, maple: 16, birch: 12, pine: 8, street: 14 };
+  for (const k in mix) for (let i = 0; i < mix[k]; i++) bag.push(k);
+  for (let i = bag.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [bag[i], bag[j]] = [bag[j], bag[i]]; }
+  let i = 0;
+  for (let gz = 0; gz < 7; gz++) for (let gx = 0; gx < 10; gx++) {
+    specs.push({ x: -108 + gx * 24 + rng.range(-7, 7), z: -100 + gz * 33 + rng.range(-10, 10), type: bag[i], seed: seed + i * 5, scale: 0.88 + rng() * 0.26 }); i++;
+  }
+}
+const t0 = performance.now();
+const forest = createTrees(world, specs, { quality: num('quality', 1), debug: true });
+const buildMs = performance.now() - t0;
+scene.add(forest.group);
+if (q.get('bare') === '1') forest.group.children.forEach((m) => { if (m.name === 'leaves') m.visible = false; });
+
+// squirrel sized marker (0.5 m long) for the inside view
+const marker = new THREE.Group();
+{
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.33, 6, 12), new THREE.MeshStandardMaterial({ color: 0xb5622e, roughness: 0.8 }));
+  body.rotation.x = Math.PI / 2; body.position.y = 0.1; body.castShadow = true; marker.add(body);
+  const tail = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.3, 6, 10), new THREE.MeshStandardMaterial({ color: 0xc9773a, roughness: 0.9 }));
+  tail.position.set(0, 0.3, -0.27); tail.rotation.x = -0.35; tail.castShadow = true; marker.add(tail);
+}
+marker.visible = false; scene.add(marker);
+
+// capsule wireframes
+let capLines = null;
+function showCapsules(on) {
+  if (on && !capLines) {
+    const v = [];
+    const a = new THREE.Vector3(), b = new THREE.Vector3(), d = new THREE.Vector3(), n = new THREE.Vector3(), bn = new THREE.Vector3(), p = new THREE.Vector3(), p2 = new THREE.Vector3();
+    for (const c of world.prims) {
+      if (c.type !== 'capsule') continue;
+      a.set(c.ax, c.ay, c.az); b.set(c.bx, c.by, c.bz); d.set(c.dx, c.dy, c.dz);
+      n.set(0, 1, 0); if (Math.abs(d.y) > 0.9) n.set(1, 0, 0);
+      n.addScaledVector(d, -n.dot(d)).normalize(); bn.crossVectors(d, n);
+      const S = 10;
+      for (let j = 0; j < S; j++) {
+        const a0 = j / S * 6.283, a1 = (j + 1) / S * 6.283;
+        for (const [c0, r] of [[a, c.ra], [b, c.rb]]) {
+          p.copy(c0).addScaledVector(n, Math.cos(a0) * r).addScaledVector(bn, Math.sin(a0) * r);
+          p2.copy(c0).addScaledVector(n, Math.cos(a1) * r).addScaledVector(bn, Math.sin(a1) * r);
+          v.push(p.x, p.y, p.z, p2.x, p2.y, p2.z);
+        }
+        if (j % 2 === 0) {
+          p.copy(a).addScaledVector(n, Math.cos(a0) * c.ra).addScaledVector(bn, Math.sin(a0) * c.ra);
+          p2.copy(b).addScaledVector(n, Math.cos(a0) * c.rb).addScaledVector(bn, Math.sin(a0) * c.rb);
+          v.push(p.x, p.y, p.z, p2.x, p2.y, p2.z);
+        }
+      }
+    }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+    capLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x00ffe0, depthTest: false, transparent: true, opacity: 0.85, fog: false }));
+    capLines.renderOrder = 10; capLines.frustumCulled = false; scene.add(capLines);
+  }
+  if (capLines) capLines.visible = on;
+}
+let perchDots = null;
+function showPerches(on) {
+  if (on && !perchDots) {
+    perchDots = new THREE.Group();
+    const g = new THREE.SphereGeometry(0.09, 10, 8), m = new THREE.MeshBasicMaterial({ color: 0xff2bd6, depthTest: false, fog: false }), mt = new THREE.MeshBasicMaterial({ color: 0xffff00, depthTest: false, fog: false });
+    for (const t of forest.trees) {
+      for (const p of t.perches) { const s = new THREE.Mesh(g, m); s.position.copy(p); s.renderOrder = 11; perchDots.add(s); }
+      const s = new THREE.Mesh(g, mt); s.position.copy(t.top); s.scale.setScalar(1.5); s.renderOrder = 11; perchDots.add(s);
+    }
+    scene.add(perchDots);
+  }
+  if (perchDots) perchDots.visible = on;
+}
+
+// camera presets
+const controls = new OrbitControls(camera, renderer.domElement);
+const focus = new THREE.Vector3(); let focusOn = false;
+const centre = new THREE.Vector3();
+function setView(name, o = {}) {
+  const single = specs.length === 1, t = forest.trees[o.tree ?? 0];
+  const ang = (o.ang ?? num('ang', 0)) * Math.PI / 180;
+  focusOn = false; marker.visible = false;
+  let ext = 0; for (const s of specs) ext = Math.max(ext, Math.hypot(s.x, s.z));
+  const H = t.height, R = t.crownRadius, bx = t.spec.x, bz = t.spec.z;
+  const a0 = Math.atan2(SUN_DIR.x, SUN_DIR.z) + 0.95 + ang, dirx = Math.sin(a0), dirz = Math.cos(a0); // ang 0: sun over the shoulder; ang 150: backlit
+  if (name === 'far') {
+    const d = single ? 100 : ext + 100;
+    camera.position.set(dirx * d, single ? 9 : 22, dirz * d); centre.set(0, single ? H * 0.5 : 6, 0);
+  } else if (name === 'top') {
+    camera.position.set(dirx * (ext * 0.75 + 30), 42, dirz * (ext * 0.75 + 30)); centre.set(0, 4, 0);
+  } else if (name === 'mid') {
+    const d = single ? Math.max(H * 1.7, R * 3.2) : ext * 0.9 + 26;
+    camera.position.set((single ? bx : 0) + dirx * d, single ? H * 0.42 : 7, (single ? bz : 0) + dirz * d); centre.set(single ? bx : 0, single ? H * 0.5 : 6, single ? bz : 0);
+  } else if (name === 'under') {
+    camera.position.set(bx + dirx * R * 0.55, 1.3, bz + dirz * R * 0.55); centre.set(bx - dirx * R * 0.1, H * 0.62, bz - dirz * R * 0.1);
+  } else if (name === 'ground') { // dappled light on the grass under the crown
+    camera.position.set(bx + dirx * R * 1.5, 5, bz + dirz * R * 1.5); centre.set(bx - SUN_DIR.x * R * 0.9, 0, bz - SUN_DIR.z * R * 0.9);
+  } else if (name === 'inside') {
+    const i = clamp(o.perch ?? num('perch', 4), 0, t.perches.length - 1), p = t.perches[i];
+    // marker faces away from the trunk; camera 1.5 m behind it (trunk side) and a little above
+    const out = new THREE.Vector3(p.x - bx, 0, p.z - bz); if (out.lengthSq() < 0.01) out.set(1, 0, 0); out.normalize();
+    out.applyAxisAngle(new THREE.Vector3(0, 1, 0), ang);
+    marker.position.copy(p); marker.lookAt(p.x + out.x, p.y, p.z + out.z); marker.visible = true;
+    camera.position.copy(p).addScaledVector(out, -1.42); camera.position.y += 0.6; camera.position.addScaledVector(new THREE.Vector3(-out.z, 0, out.x), 0.5);
+    centre.copy(p).addScaledVector(out, 0.6); centre.y += 0.15;
+    focus.copy(p); focus.y += 0.12; focusOn = q.get('nofocus') !== '1';
+  }
+  controls.target.copy(centre); camera.lookAt(centre); controls.update();
+}
+function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+
+const info = document.getElementById('info');
+function stats() {
+  const s = forest.stats, r = renderer.info.render;
+  return { trees: s.trees, triangles: s.triangles, barkTriangles: s.barkTriangles, leafTriangles: s.leafTriangles, leafCards: s.leafCards, treeDrawCalls: s.drawCalls,
+    capsules: s.capsules, capsulesPerTree: +(s.capsules / s.trees).toFixed(1), frameTriangles: r.triangles, frameCalls: r.calls, buildMs: Math.round(buildMs), perType: s.perType, levels: s.skeletons.slice(0, 5).map((T) => { const o = {}; for (const b of T.branches) { const k = 'L' + b.level; o[k] = o[k] || { n: 0, len: 0, r0: 0 }; o[k].n++; o[k].len += b.len; o[k].r0 += b.rad[0]; } for (const k in o) { o[k].len = +(o[k].len / o[k].n).toFixed(2); o[k].r0 = +(o[k].r0 / o[k].n).toFixed(3); } return o; }),
+    perches: forest.trees.map((t) => t.perches.length).slice(0, 8), heights: forest.trees.slice(0, 8).map((t) => +t.height.toFixed(1)), radii: forest.trees.slice(0, 8).map((t) => +t.crownRadius.toFixed(1)) };
+}
+// hop check: for sturdy pieces, distance from a point on the piece to the nearest other sturdy piece that is not a neighbour
+function hopCheck(treeIndex = 0) {
+  const t = forest.trees[treeIndex], out = { n: 0, within1: 0, within3: 0, beyond3: 0 };
+  const caps = world.prims.filter((c) => c.type === 'capsule' && c.kind === 'branch' && Math.max(c.ra, c.rb) >= 0.06 && Math.hypot(c.ax - t.spec.x, c.az - t.spec.z) < t.crownRadius + 1);
+  const p = new THREE.Vector3(), hit = { dist: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(), prim: null, t: 0 };
+  for (const c of caps) {
+    p.set((c.ax + c.bx) / 2, (c.ay + c.by) / 2, (c.az + c.bz) / 2);
+    let best = Infinity;
+    for (const o of caps) {
+      if (o === c) continue;
+      world.primDistance(o, p, hit);
+      const d = hit.dist;
+      if (d < 0.6) continue; // the same limb or a direct neighbour
+      if (d < best) best = d;
+    }
+    out.n++; if (best <= 1) out.within1++; else if (best <= 3) out.within3++; else out.beyond3++;
+  }
+  return out;
+}
+let paused = false, tFix = null;
+window.debug = { setView, stats, hopCheck, capsules: showCapsules, perches: showPerches, forest, world, camera, scene, renderer, time: (t) => { tFix = t; }, leaves: (on) => forest.group.children.forEach((m) => { if (m.name === 'leaves') m.visible = on; }) };
+
+setView(q.get('view') || 'mid');
+if (q.get('caps') === '1') showCapsules(true);
+if (q.get('perches') === '1') showPerches(true);
+if (q.get('hud') === '0') info.style.display = 'none';
+
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+const sf = new THREE.Vector3();
+let last = 0, frames = 0, fpsT = 0, fps = 0;
+renderer.setAnimationLoop((ms) => {
+  const t = tFix ?? ms / 1000, dt = Math.min(0.1, t - last); last = t;
+  controls.update();
+  sf.copy(focusOn ? focus : controls.target); if (!focusOn) sf.y = 0;
+  env.update(sf, t);
+  forest.update(dt, t, camera, focusOn ? focus : null);
+  renderer.render(scene, camera);
+  frames++; if (ms - fpsT > 500) { fps = frames * 1000 / (ms - fpsT); frames = 0; fpsT = ms;
+    const r = renderer.info.render; info.textContent = `${fps.toFixed(0)} fps   frame: ${(r.triangles / 1000).toFixed(0)}k tris, ${r.calls} calls\ntrees ${forest.stats.trees}: ${(forest.stats.triangles / 1000).toFixed(0)}k tris in ${forest.stats.drawCalls} meshes, ${forest.stats.capsules} capsules`; }
+});
+</script></body></html>

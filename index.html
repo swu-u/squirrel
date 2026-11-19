@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Squirrel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#2a1a10">
+<meta name="description" content="Be a squirrel. Climb the trees, run the wires, cross the rooftops, gather acorns and see off the dogs.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5.300 10.800c0 6 3.300 10.200 6.700 11.400 3.400-1.200 6.700-5.400 6.700-11.400z' fill='%23e8842c'/%3E%3Cpath d='M3.600 10.600c0-4.200 3.700-6.600 8.400-6.600s8.400 2.400 8.400 6.600c0 .9-.6 1.600-1.500 1.600H5.100c-.9 0-1.500-.7-1.500-1.600z' fill='%237a4a26'/%3E%3C/svg%3E">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #2a1a10; overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+  #game { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; overflow: hidden; touch-action: none; }
+  .game-canvas { position: absolute; inset: 0; width: 100% !important; height: 100% !important; display: block; touch-action: none; }
+  #loading { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    background: radial-gradient(120% 90% at 50% 40%, #f6c98f 0%, #d9793a 45%, #4a2414 100%); color: #fff7ea; font: 600 17px/1.3 ui-rounded, "SF Pro Rounded", "Nunito", system-ui, -apple-system, "Segoe UI", sans-serif; transition: opacity .6s ease; }
+  #loading.done { opacity: 0; pointer-events: none; }
+  .loading-acorn { width: 64px; height: 64px; animation: bob 0.9s ease-in-out infinite alternate; filter: drop-shadow(0 6px 10px rgba(60,20,0,.35)); }
+  .loading-text { letter-spacing: .02em; text-shadow: 0 1px 6px rgba(60,20,0,.4); text-align: center; padding: 0 24px; }
+  @keyframes bob { from { transform: translateY(-6px) rotate(-8deg); } to { transform: translateY(6px) rotate(8deg); } }
+</style>
+</head>
+<body>
+<div id="game"></div>
+<div id="loading">
+  <svg class="loading-acorn" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.4 4.600c0-1.500.7-2.500 2-3" fill="none" stroke="#4a2f1c" stroke-width="1.700" stroke-linecap="round"/><path d="M5.300 10.800c0 6 3.300 10.200 6.700 11.400 3.400-1.200 6.700-5.400 6.700-11.400z" fill="#ffb24d"/><path d="M3.600 10.600c0-4.200 3.700-6.600 8.400-6.600s8.400 2.400 8.400 6.600c0 .9-.6 1.600-1.500 1.600H5.100c-.9 0-1.500-.7-1.500-1.600z" fill="#7a4a26"/></svg>
+  <div class="loading-text">Growing the trees…</div>
+</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

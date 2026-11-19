@@ -1,0 +1,164 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>City viewer</title><link rel="icon" href="data:,">
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#222;font:12px/1.4 system-ui,sans-serif}canvas{display:block}
+#info{position:fixed;left:8px;bottom:8px;color:#fff;background:rgba(0,0,0,.45);padding:6px 8px;border-radius:6px;white-space:pre;pointer-events:none;max-width:70vw}</style></head><body>
+<div id="info"></div>
+<script type="module">
+// City viewer. Query params:
+//   cam=aerial|street|park|roofs|wire|alley|home|cafe|church|crane|tower|yard|lane|pond|playground|gazebo|street2|roofs2|top
+//   pos=x,y,z & look=x,y,z   free camera        prims=1  collision wireframes      spots=1  pickup spots and dog zones
+//   q=0..1  quality          fov=55             hud=0  hide the text overlay
+// Keys: WASD + QE to fly, drag to look, P toggles collision wireframes, O toggles spots.
+import * as THREE from 'three';
+import { setupEnvironment } from '../src/world/env.js';
+import { World } from '../src/core/world.js';
+import { createCity, checkReachability } from '../src/world/city.js';
+
+const qp = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight); document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(+(qp.get('fov') || 55), innerWidth / innerHeight, 0.1, 2000);
+const env = setupEnvironment(scene, renderer);
+const world = new World();
+const t0 = performance.now();
+const city = createCity(world, { quality: +(qp.get('q') ?? 1) });
+const buildMs = performance.now() - t0;
+scene.add(city.group);
+const L = city.layout, D = city.debug.state;
+const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+// ---- camera presets
+const presets = {
+  aerial: () => [V(-105, 92, -125), V(0, 0, 5)],
+  top: () => [V(0, 250, 1), V(0, 0, 0)],
+  street: () => [V(-34, 1.1, -57.5), V(10, 5.5, -66)],
+  street2: () => [V(57.5, 1.3, 30), V(66, 6, -10)],
+  park: () => [V(9, 1.2, 14), V(-20, 5, -60)],
+  home: () => [V(L.home.x + 7, L.home.y + 1.5, L.home.z + 6), L.home.clone()],
+  pond: () => [V(-9, 1.4, 12), V(-22, 0, 20)],
+  playground: () => [V(13, 2.2, 13), V(22, 1.2, 21)],
+  gazebo: () => [V(-11, 2.0, -11.5), V(-20, 2.2, -20)],
+  roofs: () => { const r = L.landmarks.firstRoof; return [V(r.x - 3, r.y + 1.6, r.z + 2), V(r.x + 40, r.y - 1, r.z - 8)]; },
+  roofs2: () => { const bd = D.blocks[3].front[1]; return [bd.toWorld(-2, bd.top + 1.6, -2), bd.toWorld(40, bd.top - 4, 3)]; },
+  roofs3: () => { const bd = D.blocks[0].back[1]; return [bd.toWorld(bd.w / 2 - 1, bd.top + 2.2, bd.d / 2 - 1), V(10, 0, 0)]; },
+  facade: () => { const bd = D.blocks[0].front[2]; return [bd.toWorld(1.5, 3.2, bd.d / 2 + 3.2), bd.toWorld(-1.5, 4.6, bd.d / 2)]; },
+  wall: () => { const bd = D.blocks[1].front[4]; return [bd.toWorld(2.5, 5.0, bd.d / 2 + 1.3), bd.toWorld(-4, 8.5, bd.d / 2)]; },
+  wire: () => { const w = D.firstDrop || D.wires[0]; const a = w.at(0.02), c = w.at(0.6); return [V(a.x + 0.5, a.y + 0.55, a.z + 1.6), V(c.x, c.y - 0.3, c.z)]; },
+  wire2: () => { const w = D.spans[6]; const a = w.at(0.03), c = w.at(0.7); return [V(a.x, a.y + 0.5, a.z).add(V(a.x - c.x, 0, a.z - c.z).normalize().multiplyScalar(1.8)), V(c.x, c.y - 0.5, c.z)]; },
+  alley: () => { const a = D.alleys[0]; const c = a.center; const s = Math.sign(c.z) || 1; return Math.abs(c.z) > Math.abs(c.x) ? [V(c.x, 1.0, c.z - Math.sign(c.z) * 14), V(c.x, 4, c.z + Math.sign(c.z) * 10)] : [V(c.x - Math.sign(c.x) * 14, 1.0, c.z), V(c.x + Math.sign(c.x) * 10, 4, c.z)]; },
+  cafe: () => { const c = L.landmarks.cafe; return [V(c.x - 13, 2.2, c.z + 15), V(c.x + 2, 2.5, c.z - 4)]; },
+  church: () => { const c = L.landmarks.steeple; return [V(c.x - 26, 2.5, c.z - 30), V(c.x + 3, 14, c.z + 2)]; },
+  crane: () => { const c = L.landmarks.site; return [V(c.x + 30, 3, c.z - 34), V(c.x - 2, 12, c.z + 2)]; },
+  tower: () => { const c = L.landmarks.waterTower; return [V(c.x + 26, 4, c.z + 30), V(c.x, c.y - 6, c.z)]; },
+  yard: () => { const z = L.dogZones.find((q) => q.kind === 'bulldog'); return [V(z.center.x + 7, 9, z.center.z - 2), V(z.center.x, 0, z.center.z + 3)]; },
+  lane: () => [V(-40, 1.5, -94.6), V(20, 4, -94.6)],
+};
+function setCam(pos, look) { camera.position.copy(pos); camera.lookAt(look); camera.userData.look = look.clone(); yaw = Math.atan2(look.x - pos.x, look.z - pos.z); pitch = Math.atan2(look.y - pos.y, Math.hypot(look.x - pos.x, look.z - pos.z)); }
+let yaw = 0, pitch = 0;
+const parse = (s) => { const a = s.split(',').map(Number); return V(a[0], a[1], a[2]); };
+if (qp.get('pos')) setCam(parse(qp.get('pos')), parse(qp.get('look') || '0,0,0'));
+else { const p = (presets[qp.get('cam')] || presets.aerial)(); setCam(p[0], p[1]); }
+
+// ---- collision overlay
+let primLines = null;
+function buildPrimLines() {
+  const pos = [], col = [], c = new THREE.Color();
+  const kinds = { building: 0xff4040, roof: 0xff9020, wire: 0x40ffff, pole: 0xffff40, rail: 0xff40ff, branch: 0x60ff60, trunk: 0x30c030, prop: 0x4080ff, car: 0x4080ff, fence: 0xc08040, ledge: 0xffffff, awning: 0xff80c0, wall: 0x9090ff };
+  const seg = (a, b, k) => { c.set(kinds[k] || 0xcccccc); pos.push(a.x, a.y, a.z, b.x, b.y, b.z); col.push(c.r, c.g, c.b, c.r, c.g, c.b); };
+  const P = (p, x, y, z) => V(p.cx + x * p.hx * p.xx + y * p.hy * p.yx + z * p.hz * p.zx, p.cy + x * p.hx * p.xy + y * p.hy * p.yy + z * p.hz * p.zy, p.cz + x * p.hx * p.xz + y * p.hy * p.yz + z * p.hz * p.zz);
+  for (const p of world.prims) {
+    if (p.type === 'box') {
+      const e = [[-1, -1, -1, 1, -1, -1], [-1, 1, -1, 1, 1, -1], [-1, -1, 1, 1, -1, 1], [-1, 1, 1, 1, 1, 1], [-1, -1, -1, -1, 1, -1], [1, -1, -1, 1, 1, -1], [-1, -1, 1, -1, 1, 1], [1, -1, 1, 1, 1, 1], [-1, -1, -1, -1, -1, 1], [1, -1, -1, 1, -1, 1], [-1, 1, -1, -1, 1, 1], [1, 1, -1, 1, 1, 1]];
+      for (const q of e) seg(P(p, q[0], q[1], q[2]), P(p, q[3], q[4], q[5]), p.kind);
+    } else {
+      const a = V(p.ax, p.ay, p.az), b = V(p.bx, p.by, p.bz), d = V(p.dx, p.dy, p.dz);
+      const u = Math.abs(d.y) > 0.9 ? V(1, 0, 0) : V(0, 1, 0), s = new THREE.Vector3().crossVectors(d, u).normalize(), t = new THREE.Vector3().crossVectors(d, s);
+      for (let i = 0; i < 6; i++) { const an = i / 6 * Math.PI * 2, o = s.clone().multiplyScalar(Math.cos(an)).addScaledVector(t, Math.sin(an)), an2 = (i + 1) / 6 * Math.PI * 2, o2 = s.clone().multiplyScalar(Math.cos(an2)).addScaledVector(t, Math.sin(an2));
+        seg(a.clone().addScaledVector(o, p.ra), b.clone().addScaledVector(o, p.rb), p.kind);
+        if (p.ra > 0.06) { seg(a.clone().addScaledVector(o, p.ra), a.clone().addScaledVector(o2, p.ra), p.kind); seg(b.clone().addScaledVector(o, p.rb), b.clone().addScaledVector(o2, p.rb), p.kind); } }
+    }
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  primLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, fog: false, depthTest: true, transparent: true, opacity: 0.9 }));
+  primLines.frustumCulled = false; scene.add(primLines);
+}
+function togglePrims(on) { if (!primLines) buildPrimLines(); primLines.visible = on ?? !primLines.visible; }
+if (qp.get('prims') === '1') togglePrims(true);
+
+// ---- pickup spots and dog zones overlay
+let spotGroup = null;
+function toggleSpots(on) {
+  if (!spotGroup) {
+    spotGroup = new THREE.Group();
+    const sg = new THREE.SphereGeometry(0.14, 8, 6), ac = new THREE.MeshStandardMaterial({ color: 0x9a5a20, emissive: 0x6a3a10, roughness: 0.5 }), go = new THREE.MeshStandardMaterial({ color: 0xffd040, emissive: 0xffb020, emissiveIntensity: 1.5 });
+    const a = L.pickupSpots.filter((s) => s.kind === 'acorn'), im = new THREE.InstancedMesh(sg, ac, a.length), m = new THREE.Matrix4();
+    a.forEach((s, i) => im.setMatrixAt(i, m.makeTranslation(s.pos.x, s.pos.y, s.pos.z))); spotGroup.add(im);
+    for (const s of L.pickupSpots) if (s.kind === 'golden') { const me = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 8), go); me.position.copy(s.pos); spotGroup.add(me); }
+    for (const z of L.dogZones) { const ring = new THREE.Mesh(new THREE.TorusGeometry(z.radius, 0.12, 6, 48), new THREE.MeshBasicMaterial({ color: z.kind === 'bulldog' ? 0xff2020 : z.kind === 'shepherd' ? 0xff9020 : 0xffff40, fog: false })); ring.rotation.x = Math.PI / 2; ring.position.copy(z.center); ring.position.y += 0.3; spotGroup.add(ring); }
+    scene.add(spotGroup);
+  }
+  spotGroup.visible = on ?? !spotGroup.visible;
+}
+if (qp.get('spots') === '1') toggleSpots(true);
+
+// ---- fly camera
+const keys = {};
+addEventListener('keydown', (e) => { keys[e.code] = true; if (e.code === 'KeyP') togglePrims(); if (e.code === 'KeyO') toggleSpots(); });
+addEventListener('keyup', (e) => { keys[e.code] = false; });
+let drag = false;
+renderer.domElement.addEventListener('pointerdown', () => { drag = true; });
+addEventListener('pointerup', () => { drag = false; });
+addEventListener('pointermove', (e) => { if (!drag) return; yaw -= e.movementX * 0.004; pitch = Math.max(-1.5, Math.min(1.5, pitch - e.movementY * 0.004)); });
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+
+// ---- stats
+function countTris(root, skip) {
+  let n = 0, meshes = 0;
+  root.traverse((o) => { if (!o.isMesh) return; let p = o; while (p) { if (p === skip) return; p = p.parent; } const g = o.geometry, c = g.index ? g.index.count : g.attributes.position.count; n += (c / 3) * (o.isInstancedMesh ? o.count : 1); meshes++; });
+  return { tris: Math.round(n), meshes };
+}
+function summary() {
+  const treeGroup = city.debug.treeSys.group;
+  const mine = countTris(city.group, treeGroup), all = countTris(city.group, null);
+  // draw calls with and without the trees
+  renderer.info.autoReset = true;
+  renderer.render(scene, camera); const callsAll = renderer.info.render.calls, trisAll = renderer.info.render.triangles;
+  treeGroup.visible = false; renderer.render(scene, camera); const callsMine = renderer.info.render.calls, trisMine = renderer.info.render.triangles; treeGroup.visible = true;
+  const sp = L.pickupSpots, by = {}; for (const s of sp) by[s.kind + ':' + s.where] = (by[s.kind + ':' + s.where] || 0) + 1;
+  const pk = {}; for (const p of world.prims) pk[p.kind] = (pk[p.kind] || 0) + 1;
+  const treePrims = (pk.trunk || 0) + (pk.branch || 0);
+  return {
+    buildMs: Math.round(buildMs), cityTriangles: mine.tris, cityMeshes: mine.meshes, treeTriangles: all.tris - mine.tris,
+    drawCallsThisViewCityOnly: callsMine - 1, trianglesThisViewCityOnly: trisMine, drawCallsThisViewWithTrees: callsAll,
+    prims: world.prims.length, cityPrims: world.prims.length - treePrims, primKinds: pk,
+    acorns: sp.filter((s) => s.kind === 'acorn').length, golden: sp.filter((s) => s.kind === 'golden').map((s) => s.name), spotsBy: by,
+    dogZones: L.dogZones.map((z) => `${z.kind} r${z.radius} ${z.name}`), trees: L.trees.length,
+    landmarks: Object.fromEntries(Object.entries(L.landmarks).map(([k, v]) => [k, [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)]])),
+    spawn: L.spawn.toArray().map((v) => +v.toFixed(2)), home: L.home.toArray().map((v) => +v.toFixed(2)), bounds: world.bounds,
+  };
+}
+window.debug = { city, world, scene, camera, renderer, summary, check: (o) => checkReachability(world, L, o), setCam: (p, l) => setCam(V(...p), V(...l)), togglePrims, toggleSpots, presets };
+
+const info = document.getElementById('info');
+if (qp.get('hud') === '0') info.style.display = 'none';
+const clock = new THREE.Clock(), fwd = new THREE.Vector3(), focus = new THREE.Vector3();
+let frame = 0;
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(0.05, clock.getDelta()), time = clock.elapsedTime;
+  const sp = (keys.ShiftLeft ? 40 : 10) * dt;
+  camera.rotation.set(0, 0, 0); camera.rotation.order = 'YXZ'; camera.rotation.y = yaw + Math.PI; camera.rotation.x = pitch;
+  camera.getWorldDirection(fwd);
+  const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+  if (keys.KeyW) camera.position.addScaledVector(fwd, sp); if (keys.KeyS) camera.position.addScaledVector(fwd, -sp);
+  if (keys.KeyD) camera.position.addScaledVector(right, sp); if (keys.KeyA) camera.position.addScaledVector(right, -sp);
+  if (keys.KeyE) camera.position.y += sp; if (keys.KeyQ) camera.position.y -= sp;
+  // shadows follow a point in front of the camera
+  const reach = Math.min(30, Math.max(6, camera.position.y * 0.9));
+  focus.copy(camera.position).addScaledVector(fwd, reach); if (camera.position.y > 60) focus.set(0, 0, 0);
+  env.update(focus, time);
+  city.update(dt, time, camera, focus);
+  renderer.render(scene, camera);
+  if (frame++ % 30 === 0 && info.style.display !== 'none') info.textContent = `calls ${renderer.info.render.calls}  tris ${renderer.info.render.triangles}  pos ${camera.position.toArray().map((v) => v.toFixed(1))}`;
+});
+</script></body></html>

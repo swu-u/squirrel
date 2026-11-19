@@ -1,0 +1,160 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Squirrel audio</title><link rel="icon" href="data:,">
+<style>
+  :root{--bg:#2a1d14;--card:#3a2a1d;--line:#5a4330;--ink:#f6e8d2;--dim:#c9b294;--acc:#f2a541;--ok:#9fd67a;--bad:#ff8a6a}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.35 system-ui,-apple-system,Segoe UI,sans-serif}
+  body{padding:12px 16px 40px}
+  h1{font-size:18px;margin:0 0 8px} h2{font-size:14px;margin:0 0 8px;color:var(--acc)}
+  section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:0 0 12px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  button{font:inherit;color:var(--ink);background:#55402c;border:1px solid #7a5c3e;border-radius:9px;padding:9px 12px;min-height:38px;cursor:pointer}
+  button:active{background:var(--acc);color:#2a1d14}
+  button.big{background:var(--acc);color:#2a1d14;font-weight:700;border-color:var(--acc)}
+  button.on{outline:2px solid var(--acc)}
+  label{display:flex;align-items:center;gap:8px;color:var(--dim);min-width:230px;flex:1 1 230px}
+  label span{min-width:74px} label output{min-width:38px;color:var(--ink);text-align:right}
+  input[type=range]{flex:1;accent-color:var(--acc);min-width:90px}
+  select{font:inherit;background:#55402c;color:var(--ink);border:1px solid #7a5c3e;border-radius:8px;padding:6px}
+  #status{color:var(--dim)} #status b{color:var(--ok)}
+  pre{font:11px/1.35 ui-monospace,Menlo,monospace;white-space:pre;overflow-x:auto;margin:8px 0 0;color:var(--ink)}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+  .cols section{margin:0}
+  .hint{color:var(--dim);font-size:12px;margin:6px 0 0}
+</style></head><body>
+<h1>Squirrel audio</h1>
+<section>
+  <div class="row">
+    <button class="big" id="start">Start audio</button>
+    <button id="mute">Mute</button><button id="music" class="on">Music on</button>
+    <label><span>volume</span><input type="range" id="vol" min="0" max="1" step="0.01" value="1"><output></output></label>
+    <span id="status">not started</span>
+  </div>
+</section>
+<div class="cols">
+<section>
+  <h2>One-shots</h2>
+  <div class="row" id="shots"></div>
+  <p class="hint">Options used by every button</p>
+  <div class="row" id="common"></div>
+  <p class="hint">Options for single sounds (jump: power, land and wire: impact, pickup: streak, dogs: size and count, leaves: amount)</p>
+  <div class="row" id="special"></div>
+  <div class="row" style="margin-top:8px"><label><span>surface</span><select id="osurface"></select></label>
+  <label style="min-width:0;flex:0"><input type="checkbox" id="autostreak" checked> pickup streak counts up by itself</label></div>
+</section>
+<section>
+  <h2>update(dt, state)</h2>
+  <div class="row" id="state"></div>
+  <div class="row" style="margin-top:8px">
+    <label><span>surface</span><select id="ssurface"></select></label>
+    <button id="airborne">airborne</button><button id="paused">paused</button>
+  </div>
+  <h2 style="margin-top:14px">Scenes</h2>
+  <div class="row" id="scenes"></div>
+  <p class="hint" id="sceneinfo">Scenes move the sliders above and fire one-shots.</p>
+</section>
+</div>
+<section>
+  <h2>Render test (offline, measures every sound)</h2>
+  <div class="row"><button id="runtest">Run render test</button><button id="pretest">Call everything before unlock</button><span id="teststatus" class="hint"></span></div>
+  <pre id="report"></pre>
+</section>
+<script type="module">
+import { createAudio, SOUND_NAMES, SURFACES } from '../src/audio/audio.js';
+import { renderTest, preUnlockTest, SCENES } from '../src/audio/renderTest.js';
+
+const $ = (id) => document.getElementById(id);
+const audio = createAudio();
+const sliders = {};
+function slider(parent, key, min, max, step, value) {
+  const l = document.createElement('label'), s = document.createElement('span'), i = document.createElement('input'), o = document.createElement('output');
+  s.textContent = key; i.type = 'range'; i.min = min; i.max = max; i.step = step; i.value = value;
+  const show = () => { o.textContent = (+i.value).toFixed(step < 1 ? 2 : 0); }; i.addEventListener('input', show); show();
+  l.append(s, i, o); parent.append(l); sliders[key] = { get: () => +i.value, set: (v) => { i.value = v; show(); } };
+}
+for (const s of SURFACES) { $('osurface').add(new Option(s, s)); $('ssurface').add(new Option(s, s)); }
+slider($('common'), 'volume', 0, 1.5, 0.01, 1); slider($('common'), 'pitch', 0.5, 2, 0.01, 1); slider($('common'), 'pan', -1, 1, 0.01, 0); slider($('common'), 'distance', 0, 60, 1, 0);
+slider($('special'), 'power', 0, 1, 0.01, 0.6); slider($('special'), 'impact', 0, 1, 0.01, 0.5); slider($('special'), 'streak', 0, 12, 1, 0);
+slider($('special'), 'size', 0, 1, 0.01, 0.5); slider($('special'), 'count', 1, 4, 1, 1); slider($('special'), 'amount', 0, 1, 0.01, 0.6);
+slider($('state'), 'speed', 0, 12, 0.1, 0); slider($('state'), 'height', 0, 25, 0.5, 0); slider($('state'), 'alert', 0, 1, 0.01, 0);
+slider($('state'), 'danger', 0, 1, 0.01, 0); slider($('state'), 'inTree', 0, 1, 0.01, 0); slider($('state'), 'flow', 0, 1, 0.01, 0);
+
+const flags = { airborne: false, paused: false };
+for (const k of ['airborne', 'paused']) $(k).onclick = () => { flags[k] = !flags[k]; $(k).classList.toggle('on', flags[k]); };
+
+function shotOpts(name) {
+  const g = (k) => sliders[k].get();
+  const o = { volume: g('volume'), pitch: g('pitch'), pan: g('pan'), distance: g('distance'), power: g('power'), impact: g('impact'),
+    streak: g('streak'), size: g('size'), amount: g('amount'), surface: $('osurface').value };
+  if (name === 'bark') o.count = g('count');
+  return o;
+}
+for (const name of SOUND_NAMES) {
+  const b = document.createElement('button'); b.textContent = name;
+  b.onclick = () => {
+    audio.unlock(); audio.play(name, shotOpts(name));
+    if (name === 'pickup' && $('autostreak').checked) sliders.streak.set((sliders.streak.get() + 1) % 13);
+  };
+  $('shots').append(b);
+}
+
+$('start').onclick = () => { audio.unlock(); };
+let muted = false, music = true;
+$('mute').onclick = () => { muted = !muted; audio.setMuted(muted); $('mute').classList.toggle('on', muted); $('mute').textContent = muted ? 'Muted' : 'Mute'; };
+$('music').onclick = () => { music = !music; audio.setMusicEnabled(music); $('music').classList.toggle('on', music); $('music').textContent = music ? 'Music on' : 'Music off'; };
+$('vol').oninput = () => { audio.setVolume(+$('vol').value); $('vol').nextElementSibling.textContent = (+$('vol').value).toFixed(2); }; $('vol').oninput();
+
+// scenes
+let scene = null, sceneT = 0, sceneEv = 0;
+for (const name of Object.keys(SCENES)) {
+  const b = document.createElement('button'); b.textContent = name;
+  b.onclick = () => { audio.unlock(); scene = { name, ...SCENES[name], events: SCENES[name].events.slice().sort((a, c) => a[0] - c[0]) }; sceneT = 0; sceneEv = 0; };
+  $('scenes').append(b);
+}
+{ const b = document.createElement('button'); b.textContent = 'stop scene'; b.onclick = () => { scene = null; $('sceneinfo').textContent = 'Scene stopped.'; }; $('scenes').append(b); }
+
+function currentState() {
+  return { speed: sliders.speed.get(), surface: $('ssurface').value, airborne: flags.airborne, height: sliders.height.get(), alert: sliders.alert.get(),
+    danger: sliders.danger.get(), inTree: sliders.inTree.get(), flow: sliders.flow.get(), paused: flags.paused };
+}
+let last = performance.now();
+function frame(nowMs) {
+  const dt = Math.min(0.1, (nowMs - last) / 1000); last = nowMs;
+  if (scene) {
+    sceneT += dt;
+    while (sceneEv < scene.events.length && scene.events[sceneEv][0] <= sceneT) { const e = scene.events[sceneEv++]; audio.play(e[1], e[2]); }
+    const s = scene.state(sceneT);
+    for (const k of ['speed', 'height', 'alert', 'danger', 'inTree', 'flow']) sliders[k].set(s[k]);
+    $('ssurface').value = s.surface; flags.airborne = s.airborne; $('airborne').classList.toggle('on', s.airborne);
+    $('sceneinfo').textContent = scene.name + ': ' + sceneT.toFixed(1) + ' of ' + scene.dur + ' s';
+    if (sceneT >= scene.dur) { scene = null; sliders.speed.set(0); sliders.danger.set(0); sliders.flow.set(0); $('sceneinfo').textContent = 'Scene finished.'; }
+  }
+  audio.update(dt, currentState());
+  const c = audio.context;
+  $('status').innerHTML = c ? 'context: <b>' + c.state + '</b>, ' + c.sampleRate + ' Hz' : 'not started (everything is a silent no-op until you press Start audio)';
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+async function runTest() {
+  $('teststatus').textContent = 'rendering...';
+  const r = await renderTest((label) => { $('teststatus').textContent = 'rendering: ' + label; });
+  $('report').textContent = r.text; $('report').style.color = r.ok ? '' : 'var(--bad)';
+  $('teststatus').textContent = r.ok ? 'all checks passed' : r.problems.length + ' problems';
+  return r.text;
+}
+$('runtest').onclick = runTest;
+$('pretest').onclick = () => { $('teststatus').textContent = preUnlockTest(createAudio); };
+
+window.debug = {
+  audio, renderTest: runTest, renderTestRaw: renderTest,
+  preUnlockTest: () => preUnlockTest(createAudio),
+  // unlocks the live context, runs a scene for a moment and reports the context state
+  liveTest: async () => {
+    const ok = audio.unlock(); await new Promise((r) => setTimeout(r, 300));
+    for (const n of SOUND_NAMES) audio.play(n, { size: Math.random() });
+    for (let i = 0; i < 120; i++) { audio.update(1 / 60, { speed: 9, surface: SURFACES[i % 5], danger: i / 120, flow: 1, inTree: 1, height: 5, alert: 0, airborne: i % 40 > 30 }); await new Promise((r) => setTimeout(r, 8)); }
+    return { unlock: ok, state: audio.context && audio.context.state, time: audio.context && audio.context.currentTime };
+  },
+};
+</script></body></html>

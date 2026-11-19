@@ -1,0 +1,192 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Squirrel viewer</title><link rel="icon" href="data:,">
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#222}canvas{display:block}
+#hud{position:fixed;left:8px;top:6px;font:12px/1.4 system-ui,sans-serif;color:#fff;text-shadow:0 1px 2px #000;white-space:pre;pointer-events:none}</style></head><body>
+<div id="hud"></div>
+<script type="module">
+// Squirrel viewer. Query params:
+//   state = idle | alert | run | burst | stopgo | climbup | climbdown | clingup | clingdown | thin | thinstill | air | turn
+//   cam   = side | side2 | back | three | three2 | front | face | top | low      (cams=a,b,c for several columns)
+//   t     = seconds to simulate deterministically, then pause            (ts=1.0,1.05,1.1 for several columns)
+//   speed, alert, turn, d (camera distance multiplier), fov, trig=<trigger>&at=<seconds>&impact=, look=x,y,z, hud=1, shadow=<range>
+// window.debug: { sq, s, step(dt, n), simulateTo(t), trigger(name, data), setState(name), setCam(name), pause(b), info() }
+import * as THREE from 'three';
+import { setupEnvironment, PALETTE } from '../src/world/env.js';
+import { createSquirrel } from '../src/player/squirrelModel.js';
+
+const q = new URLSearchParams(location.search);
+const num = (k, d) => (q.has(k) ? +q.get(k) : d);
+let stateName = q.get('state') || 'idle';
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight); document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(num('fov', 45), innerWidth / innerHeight, 0.02, 2000);
+const env = setupEnvironment(scene, renderer, q.has('shadow') ? { shadowRange: num('shadow', 42) } : {});
+
+// ---- patterned ground (0.25 m squares) that scrolls under the squirrel
+function checker(a, b, line) {
+  const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+  g.fillStyle = a; g.fillRect(0, 0, 128, 128); g.fillStyle = b; g.fillRect(0, 0, 64, 64); g.fillRect(64, 64, 64, 64);
+  g.fillStyle = line; g.fillRect(0, 0, 128, 3); g.fillRect(0, 0, 3, 128);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8; return t;
+}
+const gtex = checker('#7f9a48', '#8aa650', '#6f8a3e'); gtex.repeat.set(120, 120);
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshStandardMaterial({ map: gtex, roughness: 1 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+// trunk and branch
+const btex = checker('#5b4636', '#66503d', '#3d2e23'); btex.repeat.set(8, 24);
+const TRUNK_R = 0.32, TRUNK_X = 3;
+const trunk = new THREE.Mesh(new THREE.CylinderGeometry(TRUNK_R, TRUNK_R, 12, 32, 1, true), new THREE.MeshStandardMaterial({ map: btex, roughness: 1 }));
+trunk.position.set(TRUNK_X, 6, 0); trunk.castShadow = true; trunk.receiveShadow = true; scene.add(trunk);
+const BR_R = 0.022, BR_X = -3, BR_Y = 1.2;
+const b2 = checker('#5b4636', '#6b5440', '#3d2e23'); b2.repeat.set(1, 80);
+const branch = new THREE.Mesh(new THREE.CylinderGeometry(BR_R, BR_R, 20, 12, 1, true), new THREE.MeshStandardMaterial({ map: b2, roughness: 1 }));
+branch.rotation.x = Math.PI / 2; branch.position.set(BR_X, BR_Y, 0); branch.castShadow = true; branch.receiveShadow = true; scene.add(branch);
+
+const sq = createSquirrel({ seed: num('seed', 1) });
+scene.add(sq.group);
+
+const s = { mode: 'surface', speed: 0, steep: 0, climb: 0, thin: 0, turn: 0, airForward: 0, airUp: 0, airTime: 0, alert: 0, lookLocal: null, time: 0 };
+if (q.has('look')) { const p = q.get('look').split(',').map(Number); s.lookLocal = new THREE.Vector3(p[0], p[1], p[2]); }
+let simT = 0, dist = 0, airY = 0, airStart = -1, paused = false;
+const trig = q.get('trig'), trigAt = num('at', 0.5); let trigDone = false;
+const SPEED = q.has('speed') ? num('speed', 8) : null;
+const ALERT = q.has('alert') ? num('alert', 1) : null;
+
+function place() {
+  const g = sq.group;
+  const onTrunk = stateName.startsWith('climb') || stateName.startsWith('cling');
+  const onBranch = stateName.startsWith('thin');
+  if (onTrunk) {
+    const down = stateName.endsWith('down');
+    // +Y local = trunk normal (+Z world), +Z local = up or down the trunk
+    const z = new THREE.Vector3(0, down ? -1 : 1, 0), y = new THREE.Vector3(0, 0, 1), x = new THREE.Vector3().crossVectors(y, z);
+    g.matrix.makeBasis(x, y, z); g.quaternion.setFromRotationMatrix(g.matrix);
+    g.position.set(TRUNK_X, 3.2, TRUNK_R);
+  } else if (onBranch) { g.quaternion.identity(); g.position.set(BR_X, BR_Y + BR_R, 0); }
+  else { g.quaternion.identity(); g.position.set(0, airY, 0); }
+  g.updateMatrixWorld(true);
+}
+
+function drive(dt) {
+  const t = simT;
+  s.mode = 'surface'; s.steep = 0; s.climb = 0; s.thin = 0; s.turn = num('turn', 0); s.alert = 0; s.speed = 0; s.airUp = 0; s.airForward = 0;
+  switch (stateName) {
+    case 'idle': s.alert = ALERT ?? 0; break;
+    case 'alert': s.alert = ALERT ?? 1; break;
+    case 'run': s.speed = SPEED ?? 8; break;
+    case 'turn': s.speed = SPEED ?? 8; s.turn = num('turn', 3); break;
+    case 'burst':
+      if (t < 0.4) { s.alert = 1; } else { if (!drive.b) { drive.b = true; sq.trigger('burst'); } s.speed = SPEED ?? 12; }
+      break;
+    case 'stopgo': {
+      const u = t % 3;
+      if (u < 1.2) s.speed = SPEED ?? 8; else s.alert = Math.min(1, (u - 1.2) / 0.3);
+      break;
+    }
+    case 'climbup': s.steep = 1; s.climb = 1; s.speed = SPEED ?? 5.5; break;
+    case 'climbdown': s.steep = 1; s.climb = -1; s.speed = SPEED ?? 5.5; break;
+    case 'clingup': s.steep = 1; s.climb = 1; s.alert = ALERT ?? 1; break;
+    case 'clingdown': s.steep = 1; s.climb = -1; s.alert = ALERT ?? 1; break;
+    case 'thin': s.thin = 1; s.speed = SPEED ?? 3; break;
+    case 'thinstill': s.thin = 1; s.alert = ALERT ?? 0.6; break;
+    case 'air': {
+      const T0 = 0.3, V0 = num('vy', 5), G = 14, sp = SPEED ?? 8;
+      if (t < T0) { s.speed = sp; }
+      else if (airStart !== -2) {
+        if (airStart < 0) { airStart = t; sq.trigger('jump'); }
+        const a = t - airStart;
+        s.mode = 'air'; s.airTime = a; s.airUp = V0 - G * a; s.airForward = sp; s.speed = sp;
+        airY = Math.max(0, V0 * a - 0.5 * G * a * a);
+        if (a > 0.05 && airY <= 0) { airStart = -2; airY = 0; s.mode = 'surface'; sq.trigger('land', { impact: num('impact', 0.7) }); }
+      } else { s.speed = sp; }
+      break;
+    }
+  }
+  if (trig && !trigDone && t >= trigAt) { trigDone = true; sq.trigger(trig, { impact: num('impact', 0.7) }); }
+  dist += s.speed * dt;
+}
+
+function scroll() {
+  const onTrunk = stateName.startsWith('climb'), onBranch = stateName.startsWith('thin');
+  ground.position.z = onTrunk || onBranch ? 0 : -(dist % 0.5);
+  trunk.position.y = 6 - (onTrunk ? (stateName.endsWith('down') ? -1 : 1) * (dist % 0.5) : 0);
+  branch.position.z = onBranch ? -(dist % 0.25) : 0;
+}
+
+function step(dt) {
+  drive(dt);
+  simT += dt; s.time = simT;
+  place();
+  sq.update(dt, s);
+  scroll();
+}
+function simulateTo(T) { const h = 1 / 60; while (simT + h <= T + 1e-9) step(h); if (T - simT > 1e-6) step(T - simT); }
+
+// ---- cameras, given in the squirrel's local frame
+const CAMS = {
+  side: [[-1.15, 0.24, 0.0], [0, 0.15, -0.1]],
+  side2: [[1.15, 0.24, 0.0], [0, 0.15, -0.1]],
+  back: [[0, 0.75, -1.5], [0, 0.14, 0.05]],
+  three: [[0.9, 1.25, -2.6], [0, 0.12, 0.0]],
+  three2: [[0.42, 0.52, -1.0], [0, 0.14, -0.05]],
+  front: [[0.3, 0.26, 1.0], [0, 0.17, 0.0]],
+  face: [[0.17, 0.2, 0.5], [0, 0.17, 0.17]],
+  facealert: [[0.2, 0.36, 0.52], [0, 0.3, 0.0]],
+  top: [[0, 1.5, -0.2], [0, 0.1, -0.2]],
+  low: [[-0.7, 0.08, 0.5], [0, 0.14, -0.05]],
+};
+let camName = q.get('cam') || 'side';
+const _p = new THREE.Vector3(), _t = new THREE.Vector3();
+function aim(name) {
+  const c = CAMS[name] || CAMS.side, d = num('d', 1);
+  _t.fromArray(c[1]); _p.fromArray(c[0]).sub(_t).multiplyScalar(d).add(_t);
+  sq.group.updateMatrixWorld(true);
+  _p.applyMatrix4(sq.group.matrixWorld); _t.applyMatrix4(sq.group.matrixWorld);
+  if (q.has('ty')) _t.y += num('ty', 0);
+  camera.position.copy(_p); camera.up.set(0, 1, 0); camera.lookAt(_t);
+}
+
+const focus = new THREE.Vector3();
+function draw(x, y, w, h, name) {
+  renderer.setViewport(x, y, w, h); renderer.setScissor(x, y, w, h); renderer.setScissorTest(true);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  aim(name);
+  focus.copy(sq.group.position); env.update(focus, simT);
+  renderer.render(scene, camera);
+}
+const hud = document.getElementById('hud');
+function info() { const r = renderer.info.render; return { calls: r.calls, triangles: r.triangles, model: sq.info, simT }; }
+
+const tsList = q.has('ts') ? q.get('ts').split(',').map(Number) : null;
+const camList = q.has('cams') ? q.get('cams').split(',') : null;
+place();
+if (tsList || camList) {
+  // grid: columns = times, rows = cameras. rendered once.
+  const ts = tsList || [num('t', 1)], cs = camList || [camName];
+  const cells = []; ts.forEach((T) => cs.forEach((c) => cells.push([T, c])));
+  const cols = num('cols', ts.length), rows = Math.ceil(cells.length / cols);
+  const W = innerWidth, Hh = innerHeight, cw = W / cols, chh = Hh / rows;
+  if (cs.length > 1 && !q.has('cols')) ts.forEach((T, i) => { simulateTo(T); cs.forEach((c, j) => draw(i * cw, Hh - (j + 1) * (Hh / cs.length), cw, Hh / cs.length, c)); });
+  else cells.forEach(([T, c], n) => { simulateTo(T); draw((n % cols) * cw, Hh - (Math.floor(n / cols) + 1) * chh, cw, chh, c); });
+  paused = true;
+} else {
+  if (q.has('t')) { simulateTo(num('t', 1)); paused = !q.has('play'); }
+  let last = performance.now();
+  renderer.setAnimationLoop((now) => {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (!paused) step(dt);
+    draw(0, 0, innerWidth, innerHeight, camName);
+    if (q.has('hud')) { const i = info(); hud.textContent = `${stateName}  t=${simT.toFixed(2)}  draw calls ${i.calls}  triangles ${i.triangles}`; }
+  });
+}
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); });
+window.debug = {
+  sq, s, THREE, scene, camera, renderer,
+  step(dt = 1 / 60, n = 1) { for (let i = 0; i < n; i++) step(dt); return simT; },
+  simulateTo, trigger: (n, d) => sq.trigger(n, d),
+  setState(n) { stateName = n; airStart = -1; airY = 0; drive.b = false; place(); }, setCam(n) { camName = n; },
+  pause(b = true) { paused = b; }, info,
+  bench(n = 600) { const t0 = performance.now(); for (let i = 0; i < n; i++) sq.update(1 / 60, s); return (performance.now() - t0) / n; },
+};
+</script></body></html>
