@@ -161,8 +161,8 @@ export class DogModel {
     let len = Math.hypot(cy - hy, cz - hz);
     if (s.rear > 0.001) {
       hy = mix(hy, d.yH * 0.94, s.rear) + hopY;
-      hz += s.rear * 0.28 * d.L;
-      pitch += s.rear * (1.02 + 0.05 * Math.sin(t * 9)) + (hopY / S) * 0.25;
+      hz += s.rear * 0.6 * d.L;
+      pitch += s.rear * (0.86 + 0.05 * Math.sin(t * 9)) + (hopY / S) * 0.25;
       cy = hy + len * Math.sin(pitch); cz = hz + len * Math.cos(pitch);
     }
     const yawL = Math.atan2(cx - hx, cz - hz);
@@ -196,7 +196,7 @@ export class DogModel {
     for (let i = 0; i < 4; i++) {
       const L = this.legs[i], df = L.def, front = df.front;
       // home under the body, world space
-      const hmx = df.paw.x * (front ? widen + 0.2 * s.growl : widen) + (front ? cx : hx) * 0.6, hmz = df.paw.z + (front ? 0 : s.sit * 0.06 * d.L - s.fear * 0.05 * d.L);
+      const hmx = df.paw.x * (front ? widen + 0.2 * s.growl : widen) + (front ? cx : hx) * 0.6, hmz = df.paw.z + (front ? 0 : s.sit * 0.06 * d.L - s.fear * 0.05 * d.L + s.rear * 0.58 * d.L);
       const hwx = px + hmx * cyw + hmz * syw, hwz = pz - hmx * syw + hmz * cyw;
       if (!L.init) { L.init = true; L.wx = hwx; L.wz = hwz; L.wy = this.ground(hwx, hwz); L.swing = false; L.timed = false; }
       // pose overrides (model space)
@@ -215,7 +215,7 @@ export class DogModel {
         const scr = Math.sin(t * 13 + (df.sgn > 0 ? 0 : Math.PI)) * s.scrabble;
         ox += w * df.paw.x * 0.9; oy += w * (cy + Lg * (0.05 + 0.2 * scr)); oz += w * Math.min(s.rearDist - 0.05 * S, cz + Lg * 0.8) - w * Math.max(0, -scr) * 0.08 * S;
       }
-      if (s.rear > 0.01 && !front && hopY > 0.001) { ow += 1; ox += df.paw.x; oy += hopY * 0.9; oz += df.paw.z + s.rear * 0.1 * d.L; }
+      if (s.rear > 0.01 && !front && hopY > 0.001) { ow += 1; ox += df.paw.x; oy += hopY * 0.9; oz += df.paw.z + s.rear * 0.58 * d.L; }
       if (s.lie > 0.01) {
         const w = s.lie; ow += w;
         ox += w * df.paw.x * (front ? 1 : 1.5); oy += w * 0.0; oz += w * (front ? Lg * 0.62 : -d.L + d.legH * 0.42);
@@ -314,7 +314,7 @@ export class DogModel {
     }
     const idleW = (1 - s.lookW) * (1 - s.sniff) * (1 - rel) * (1 - s.stun);
     tYaw = clamp(tYaw * s.lookW + this.idleYaw * idleW, -1.7, 1.7);
-    tPitch = clamp(tPitch * s.lookW + this.idlePitch * idleW, -0.8, 1.35);
+    tPitch = clamp(tPitch * s.lookW + this.idlePitch * idleW, -0.8 - s.rear * 0.8, 1.35);
     this.lookYaw = damp(this.lookYaw, tYaw, 11, dt); this.lookPitch = damp(this.lookPitch, tPitch, 11, dt);
     const ly = this.lookYaw + Math.sin(t * 2.4) * 0.5 * s.stun + this.bend * 0.6 + Math.sin(t * 5) * 0.25 * s.sniff + this.flX * 0.5 + Math.sin(t * 24) * 0.5 * s.shake;
     const lpch = this.lookPitch;

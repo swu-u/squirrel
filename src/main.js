@@ -44,6 +44,7 @@ async function boot() {
   renderer.setSize(container.clientWidth, container.clientHeight);
   renderer.domElement.className = 'game-canvas';
   container.prepend(renderer.domElement);
+  renderer.info.autoReset = false;
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.08, 900);
   const env = setupEnvironment(scene, renderer, { shadowSize: Q.shadow, shadowRange: Q.range });
@@ -192,7 +193,7 @@ async function boot() {
   }
   function doAttack() {
     attackCd = 0.42;
-    const d = nearestDog(15);
+    const d = nearestDog(12);
     if (!d) { squirrel.trigger('chatter'); audio.play('chatter'); attackCd = 0.9; return; }
     const dist = d.position.distanceTo(player.pos);
     _v.copy(d.position).sub(player.pos); const dir = _v.clone().setY(0).normalize();
@@ -205,6 +206,7 @@ async function boot() {
       // spring back out of reach
       player.bounce(6.5, 0); player.vel.x = -dir.x * 6; player.vel.z = -dir.z * 6; player.invuln = Math.max(player.invuln, 0.35);
     } else {
+      attackCd = 0.75;
       squirrel.trigger('throw'); audio.play('throw');
       squirrel.getHeadWorldPosition(_head);
       effects.throwNut(_head, d, (pos, hdir) => { if (!d.alive) return; d.hit(1, hdir, 'nut'); audio.play('nutHit', { distance: pos.distanceTo(player.pos) }); effects.hit(pos); });
@@ -214,6 +216,17 @@ async function boot() {
   function saveNow() {
     try { localStorage.setItem(SAVE_KEY, JSON.stringify({ taken: pickups.takenMap(), acorns: stats.acorns, golden: stats.golden, dogs: stats.dogs, bulldog: stats.bulldog, quest: quests.index, time: stats.time, ended: endingShown })); } catch (e) { /* storage may be blocked */ }
   }
+
+  // when a device cannot keep up even at low resolution, drop the most expensive extras one at a time
+  let degrade = 0;
+  function degradeStep() {
+    degrade++;
+    if (degrade === 1) { if (post.bloom) post.bloom.enabled = false; }
+    else if (degrade === 2) { scene.traverse((o) => { if (o.isMesh && o.customDepthMaterial) o.castShadow = false; }); }
+    else if (degrade === 3) { renderer.shadowMap.autoUpdate = false; shadowSkip = true; }
+  }
+  let shadowSkip = false, shadowTick = 0;
+  if (qname === 'low') { degrade = 1; degradeStep(); }
 
   // ---------------------------------------------------------------- resize
   function resize() {
@@ -376,6 +389,8 @@ async function boot() {
     post.grade.uniforms.uDanger.value += (clamp(dangerT / 3, 0, 0.5) + (sinceHurt < 0.5 ? 0.5 : 0) - post.grade.uniforms.uDanger.value) * 0.1;
     post.grade.uniforms.uSpeed.value += ((player.bursting ? 1 : 0) - post.grade.uniforms.uSpeed.value) * 0.1;
 
+    if (shadowSkip && (shadowTick++ % 3) === 0) renderer.shadowMap.needsUpdate = true;
+    renderer.info.reset();
     post.render(rawDt);
     input.endFrame();
 
@@ -385,6 +400,7 @@ async function boot() {
     if (prT > 1.5 && time > 4) { // adapt resolution to hold the frame rate
       prT = 0;
       if (frameAvg > 21 && curPR > 0.85) { curPR = Math.max(0.85, curPR - 0.15); resize(); }
+      else if (frameAvg > 24 && degrade < 3) degradeStep();
       else if (frameAvg < 14.5 && curPR < maxPR) { curPR = Math.min(maxPR, curPR + 0.1); resize(); }
     }
   }
@@ -396,7 +412,7 @@ async function boot() {
   try { renderer.compile(scene, camera); } catch (e) { /* ignore */ }
   loading.classList.add('done'); setTimeout(() => loading.remove(), 700);
 
-  window.game = { player, world, rig, camera, scene, renderer, stats, quests, pickups, dogs: () => dogs, layout, hud, input, audio, squirrel, TUNE, start: startGame, info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, frameAvg, curPR, mode }), step: (n, dtt = 1 / 60) => { for (let i = 0; i < n; i++) frame(last + dtt * 1000); } };
+  window.game = { player, world, rig, camera, scene, renderer, stats, quests, pickups, dogs: () => dogs, layout, hud, input, audio, squirrel, TUNE, start: startGame, info: () => ({ calls: renderer.info.render.calls, tris: renderer.info.render.triangles, frameAvg, curPR, mode, health, combo, degrade }), step: (n, dtt = 1 / 60) => { for (let i = 0; i < n; i++) frame(last + dtt * 1000); } };
 }
 
 boot().catch((err) => {

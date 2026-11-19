@@ -31,7 +31,7 @@ export const KINDS = {
     S: 1.1, L: 0.8, chest: [0.33, 0.21, 0.36], belly: [0.26, 0.2, 0.25], hip: [0.22, 0.19, 0.22], hipTop: 0.93,
     neckLen: 0.2, neckAng: 0.7, neckR0: 0.25, neckR1: 0.23, cr: 0.225, crW: 1.22, ml: 0.13, mr: 0.15, mrW: 1.25, headPitch: 0.12,
     legT: 1.7, sxF: 0.27, sxH: 0.19, ear: 'rose', earLen: 0.2, tailLen: 0.13, tailAng: 0.5, tailR: [0.05, 0.045, 0.04, 0.035, 0.028],
-    scruff: 0.006, eye: 0.13, radius: 0.56, maxSpeed: 7, health: 8, collar: [0.07, 0.06, 0.06],
+    scruff: 0.006, eye: 0.15, radius: 0.56, maxSpeed: 7, health: 8, collar: [0.07, 0.06, 0.06],
   },
 };
 
@@ -306,10 +306,10 @@ function makeCoat(kind, K, ctx) {
         // brown patch over the right eye and ear side, white blaze, dark jowls
         const patch = sstep(K.cr * 0.75, K.cr * 0.55, Math.hypot(l[0] + ctx.eyeX * 1.25, (l[1] - ctx.eyeY) * 0.9, (l[2] - ctx.eyeZ * 0.6) * 0.6) + nz * 0.1);
         const back = sstep(K.cr * 0.1, -K.cr * 0.5, l[2] + nz * 0.15) * sstep(-0.05, 0.02, l[0] * -1 + 0.1);
-        const jowl = sstep(ctx.zStop - 0.03, ctx.zStop + 0.05, l[2]) * sstep(ctx.yM + K.mr * 0.3, ctx.yM - K.mr * 0.2, l[1]);
+        const jowl = sstep(ctx.zStop + 0.0, ctx.zStop + 0.06, l[2]) * sstep(ctx.yM - K.mr * 0.25, ctx.yM - K.mr * 0.6, l[1]) * (part === 'jaw' ? 0.25 : 1);
         let c = white; let br = Math.max(patch, back * 0.9);
         c = mixc(c, brown, br);
-        c = mixc(c, skin, jowl * 0.75);
+        c = mixc(c, skin, jowl * 0.6);
         if (part === 'brow') return set(l[0] < 0 ? mixc(brown, [0.3, 0.16, 0.08], 0.5) : [0.8, 0.74, 0.66], 0, l[0] < 0 ? 1 : 0);
         return set(c, 0, br * (1 - jowl));
       }
@@ -451,39 +451,44 @@ export function buildDog(kind) {
   const headRange = loft(B, 'head', headRings, { segs: 22, rings: 22, scruff: K.scruff * 0.9, capScale: bull ? 0.45 : 0.7 });
 
   // lower jaw
-  const jawLen = bull ? zStop + ml * 1.22 : zStop + ml * 0.93;
+  const jawLen = bull ? zStop + ml * 1.12 : zStop + ml * 0.93;
   const jawY = yM - mr * 0.5;
   rest.jaw = toModel([0, -cr * 0.5, cr * 0.2]);
   loft(B, 'jaw', [
     R([0, -cr * 0.48, cr * 0.15], crx * 0.55, [cr * 0.12, cr * 0.3], { jaw: 1 }),
     R([0, jawY, zStop * 0.95], mrx * (bull ? 1.02 : 0.96), [mr * 0.22, mr * 0.56], { jaw: 1 }),
     R([0, jawY, mix(zStop, jawLen, 0.6)], mrx * (bull ? 1.06 : 0.92), [mr * 0.2, mr * 0.52], { jaw: 1 }),
-    R([0, jawY + (bull ? mr * 0.14 : 0), jawLen], mrx * (bull ? 0.98 : 0.78), [mr * 0.18, mr * 0.44], { jaw: 1 }),
+    R([0, jawY + (bull ? mr * 0.1 : 0), jawLen], mrx * (bull ? 0.9 : 0.78), [mr * (bull ? 0.3 : 0.18), mr * (bull ? 0.55 : 0.44)], { jaw: 1 }),
   ], { segs: 14, rings: 9, scruff: K.scruff * (kind === 'terrier' ? 1.4 : 0.6), capScale: bull ? 0.5 : 0.7 });
   if (kind === 'terrier') { // beard and moustache tufts
     loft(B, 'jaw', [
       R([0, jawY - mr * 0.1, zStop + ml * 0.35], mrx * 0.7, mr * 0.4, { jaw: 1 }),
       R([0, jawY - mr * 0.55, zStop + ml * 0.62], mrx * 0.85, mr * 0.5, { jaw: 1 }),
       R([0, jawY - mr * 1.0, zStop + ml * 0.74], mrx * 0.3, mr * 0.2, { jaw: 1 }),
-    ], { segs: 10, rings: 7, scruff: K.scruff * 1.6, up: [0, 0, 1] });
+    ], { segs: 12, rings: 10, scruff: K.scruff * 1.0, up: [0, 0, 1] });
     for (const sgn of [-1, 1]) loft(B, 'head', [
       R([sgn * mrx * 0.35, yM + mr * 0.1, zEnd - ml * 0.12], mr * 0.5, mr * 0.55, { head: 1 }),
       R([sgn * mrx * 1.0, yM - mr * 0.25, zEnd - ml * 0.3], mr * 0.52, mr * 0.6, { head: 1 }),
       R([sgn * mrx * 1.25, yM - mr * 0.9, zEnd - ml * 0.45], mr * 0.2, mr * 0.22, { head: 1 }),
-    ], { segs: 8, rings: 6, scruff: K.scruff * 1.6, up: [0, 0, 1] });
+    ], { segs: 12, rings: 10, scruff: K.scruff * 0.9, up: [0, 0, 1] });
   }
-  if (bull) { // jowls hanging either side of the muzzle
+  if (bull) { // jowls hanging either side of the muzzle, and a wrinkle roll over the nose
     for (const sgn of [-1, 1]) loft(B, 'head', [
-      R([sgn * mrx * 0.5, yM + mr * 0.25, zEnd - ml * 0.2], mr * 0.45, mr * 0.5, { head: 1 }),
-      R([sgn * mrx * 0.86, yM - mr * 0.25, zEnd - ml * 0.55], mr * 0.5, mr * 0.62, { head: 1 }),
-      R([sgn * mrx * 0.92, yM - mr * 0.85, zEnd - ml * 0.9], mr * 0.34, mr * 0.46, { head: 1 }),
-      R([sgn * mrx * 0.86, yM - mr * 1.05, zEnd - ml * 1.3], mr * 0.16, mr * 0.2, { head: 1 }),
-    ], { segs: 10, rings: 8, up: [0, 0, 1] });
+      R([sgn * mrx * 0.3, yM + mr * 0.2, zEnd - ml * 0.05], mr * 0.4, mr * 0.42, { head: 1 }),
+      R([sgn * mrx * 0.66, yM - mr * 0.12, zEnd - ml * 0.2], mr * 0.5, mr * 0.55, { head: 1 }),
+      R([sgn * mrx * 0.86, yM - mr * 0.6, zEnd - ml * 0.6], mr * 0.42, mr * 0.5, { head: 1 }),
+      R([sgn * mrx * 0.84, yM - mr * 0.92, zEnd - ml * 1.15], mr * 0.2, mr * 0.24, { head: 1 }),
+    ], { segs: 12, rings: 10, up: [0, 0, 1] });
+    loft(B, 'head', [
+      R([-mrx * 0.62, yM + mr * 0.78, zStop + ml * 0.3], mr * 0.2, mr * 0.16, { head: 1 }),
+      R([0, yM + mr * 1.02, zStop + ml * 0.55], mr * 0.26, mr * 0.2, { head: 1 }),
+      R([mrx * 0.62, yM + mr * 0.78, zStop + ml * 0.3], mr * 0.2, mr * 0.16, { head: 1 }),
+    ], { segs: 8, rings: 9, up: [0, 1, 0] });
   }
 
   // nose
-  const noseP = surfacePoint(B, headRange, [0, yM, zStop], [0, 0.22, 1]);
-  blob(B, 'nose', add(noseP.p, [0, mr * (bull ? 0.05 : 0.1), -mr * 0.2]), [mr * (bull ? 0.4 : 0.38), mr * 0.3, mr * 0.32], { head: 1 }, { n: 7, segs: 10 });
+  const noseP = surfacePoint(B, headRange, [0, yM, zStop], bull ? [0, 0.1, 1] : [0, 0.22, 1]);
+  blob(B, 'nose', add(noseP.p, [0, mr * (bull ? 0.05 : 0.1), -mr * 0.2]), [mr * (bull ? 0.36 : 0.38), mr * (bull ? 0.26 : 0.3), mr * 0.32], { head: 1 }, { n: 7, segs: 10 });
 
   // eyes, rims, highlights, brows
   const er = cr * K.eye;
@@ -526,31 +531,32 @@ export function buildDog(kind) {
         R(P(0.13, 1.0, -0.06), cr * 0.06, [cr * 0.012, cr * 0.03], w),
       ], { segs: 12, rings: 8, up: [0, 0, 1], capA: 'none', capB: 0.012 });
     } else if (K.ear === 'folded') {
-      const bS = surfacePoint(B, headRange, [0, 0, 0], [0.62 * sgn, 0.7, -0.2]);
+      // V-shaped drop ear: lifts off the skull, folds, and the flap hangs forward beside the eye
+      const bS = surfacePoint(B, headRange, [0, 0, 0], [0.6 * sgn, 0.74, -0.12]);
       const b0 = add(bS.p, [0, -cr * 0.1, 0]);
       rest[bone] = toModel(b0);
-      const P = (x, y, z) => add(b0, [x * sgn * e, y * e, z * e]);
-      // rises from the skull, folds over and hangs forward: wide axis = ry here (frame hint is X)
+      const P = (x, y, z) => add(b0, [x * sgn * cr, y * cr, z * cr]);
       loft(B, bone, [
-        R(P(-0.05, -0.08, 0), cr * 0.1, cr * 0.36, wb),
-        R(P(0.1, 0.28, 0.06), cr * 0.07, cr * 0.42, w),
-        R(P(0.3, 0.42, 0.34), cr * 0.05, cr * 0.44, w),
-        R(P(0.5, 0.18, 0.66), cr * 0.045, cr * 0.36, w),
-        R(P(0.56, -0.2, 0.86), cr * 0.035, cr * 0.2, w),
-        R(P(0.56, -0.42, 0.95), cr * 0.02, cr * 0.05, w),
-      ], { segs: 10, rings: 12, up: [1, 0, 0], capA: 'none', capB: 0.01, scruff: K.scruff * 0.5 });
+        R(P(-0.12, -0.1, -0.02), cr * 0.09, cr * 0.34, wb),
+        R(P(0.1, 0.2, 0.04), cr * 0.065, cr * 0.4, w),
+        R(P(0.36, 0.26, 0.14), cr * 0.05, cr * 0.42, w),
+        R(P(0.56, 0.02, 0.3), cr * 0.045, cr * 0.38, w),
+        R(P(0.6, -0.36, 0.46), cr * 0.04, cr * 0.26, w),
+        R(P(0.58, -0.66, 0.56), cr * 0.025, cr * 0.07, w),
+      ], { segs: 12, rings: 14, up: [0, 0, 1], capA: 'none', capB: 0.01, scruff: K.scruff * 0.4 });
     } else {
-      const bS = surfacePoint(B, headRange, [0, 0, 0], [0.72 * sgn, 0.62, -0.3]);
+      // small rose ear: folds outwards and back
+      const bS = surfacePoint(B, headRange, [0, 0, 0], [0.7 * sgn, 0.66, -0.25]);
       const b0 = add(bS.p, [0, -cr * 0.08, 0]);
       rest[bone] = toModel(b0);
-      const P = (x, y, z) => add(b0, [x * sgn * e, y * e, z * e]);
+      const P = (x, y, z) => add(b0, [x * sgn * cr, y * cr, z * cr]);
       loft(B, bone, [
-        R(P(-0.1, -0.1, 0.05), cr * 0.08, cr * 0.3, wb),
-        R(P(0.25, 0.3, 0.0), cr * 0.06, cr * 0.34, w),
-        R(P(0.75, 0.3, -0.25), cr * 0.045, cr * 0.32, w),
-        R(P(1.1, -0.05, -0.55), cr * 0.04, cr * 0.22, w),
-        R(P(1.2, -0.4, -0.75), cr * 0.02, cr * 0.06, w),
-      ], { segs: 10, rings: 10, up: [0, 0.3, 1], capA: 'none', capB: 0.01 });
+        R(P(-0.1, -0.08, 0.02), cr * 0.07, cr * 0.26, wb),
+        R(P(0.08, 0.14, -0.02), cr * 0.055, cr * 0.3, w),
+        R(P(0.28, 0.14, -0.12), cr * 0.045, cr * 0.3, w),
+        R(P(0.42, -0.06, -0.24), cr * 0.04, cr * 0.24, w),
+        R(P(0.44, -0.26, -0.32), cr * 0.025, cr * 0.08, w),
+      ], { segs: 10, rings: 10, up: [0, 0, 1], capA: 'none', capB: 0.01 });
     }
   }
 

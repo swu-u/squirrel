@@ -211,8 +211,8 @@ export class World {
   raycast(origin, dir, maxDist, minRadius = 0.22, skin = 0.05) {
     const out = this._ray || (this._ray = { dist: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(), prim: null, t: 0 });
     const p = this._rp || (this._rp = new THREE.Vector3());
-    const filter = (pr) => pr.type === 'box' ? !pr.noCamera : Math.max(pr.ra, pr.rb) >= minRadius;
-    let t = 0;
+    const filter = (pr) => pr.type === 'box' ? !(pr.noCamera || pr.kind === 'ledge' || pr.kind === 'rail' || pr.kind === 'fence') : Math.max(pr.ra, pr.rb) >= minRadius;
+    let t = 0.3;
     for (let i = 0; i < 40 && t < maxDist; i++) {
       p.copy(dir).multiplyScalar(t).add(origin);
       const hit = this.nearest(p, 3, out, filter);

@@ -78,7 +78,7 @@ function stepPlayer(pl, dt, world) {
   const s = pl.script, p = pl.position, ox = p.x, oz = p.z;
   if (s.mode === 'still') { p.x = s.x; p.z = s.z; pl.heightAboveGround = s.y || 0; }
   else if (s.mode === 'circle') { s.a += (s.speed / s.r) * dt; p.x = Math.cos(s.a) * s.r; p.z = Math.sin(s.a) * s.r; pl.heightAboveGround = 0; }
-  else if (s.mode === 'trunk') { p.x = TRUNK.x; p.z = TRUNK.z; pl.heightAboveGround = s.y || TRUNK.h; }
+  else if (s.mode === 'trunk') { p.x = TRUNK.x + (s.ox || 0); p.z = TRUNK.z + (s.oz || 0); pl.heightAboveGround = s.y || TRUNK.h; }
   else if (s.mode === 'run') { p.x += s.vx * dt; p.z += s.vz * dt; pl.heightAboveGround = 0; }
   p.y = world.groundHeight(p.x, p.z) + pl.heightAboveGround;
   pl.velocity.set((p.x - ox) / dt, 0, (p.z - oz) / dt);
@@ -117,6 +117,19 @@ async function runTest(kind = 'terrier') {
   const seen = (from, to, after = 0) => log.find((l) => l.t >= after && (!from || l.from === from) && l.to === to);
   const check = (name, ok, info) => checks.push({ name, ok: !!ok, info });
   const front = (d) => { pl.script.mode = 'still'; pl.script.x = dog.position.x + Math.sin(dog.yaw) * d; pl.script.z = dog.position.z + Math.cos(dog.yaw) * d; pl.script.y = 0; };
+  const ro = new THREE.Vector3(), rd = new THREE.Vector3();
+  /** stand the squirrel d metres from the dog, in plain view, on the side nearest the zone centre */
+  const near = (d) => {
+    let best = 1e9, bx = 0, bz = 0;
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2, x = dog.position.x + Math.sin(a) * d, z = dog.position.z + Math.cos(a) * d;
+      ro.set(dog.position.x, dog.position.y + 0.5, dog.position.z); rd.set(Math.sin(a), 0, Math.cos(a));
+      if (world.raycast(ro, rd, d + 1.5, 0.1) < d + 1.5) continue;
+      const c = Math.hypot(x - zone.center.x, z - zone.center.z);
+      if (c < best) { best = c; bx = x; bz = z; }
+    }
+    pl.script.mode = 'still'; pl.script.x = bx; pl.script.z = bz; pl.script.y = 0;
+  };
 
   // 1. patrol alone for 25 s
   step(1500);
@@ -135,8 +148,8 @@ async function runTest(kind = 'terrier') {
   front(9); pl.script.y = 4; step(40);
   check('high squirrel at 9 m is not noticed', dog.state === 'patrol');
   // put the squirrel in an open spot 6 m in front
-  pl.invulnerable = true; front(6); t0 = time;
-  const noticed = until(() => dog.state === 'notice', 240, () => { if (dog.state === 'patrol') front(6); });
+  pl.invulnerable = true; near(4.5); t0 = time;
+  const noticed = until(() => dog.state === 'notice', 240, () => { if (dog.state === 'patrol') near(4.5); });
   const tn = time;
   until(() => dog.state === 'chase', 120);
   check('notice then chase after about 0.5 s', noticed && Math.abs(time - tn - 0.5) < 0.1, { noticeToChase: +(time - tn).toFixed(2) });
@@ -152,10 +165,19 @@ async function runTest(kind = 'terrier') {
   check('no bite while invulnerable', bites === 0);
   // 5. vulnerable squirrel standing still gets bitten
   pl.invulnerable = false; const b0 = bites;
-  until(() => bites > b0, 900, () => { if (kind === 'bulldog' && dog.state === 'chargeWindup') check('bulldog charges', true); });
+  until(() => bites > b0, 900);
   const be = events.filter((e) => e.type === 'bite').pop();
   check('bite connects on a still squirrel', bites > b0 && be && be.data.damage === (kind === 'bulldog' ? 2 : 1), be);
   pl.invulnerable = true;
+  if (kind === 'bulldog') { // boss: charges from a distance and shrugs off nuts while charging
+    until(() => dog.state === 'chase', 300); near(8);
+    const ch = until(() => dog.state === 'charge', 900, () => { if (dog.state === 'chase' && Math.hypot(pl.position.x - dog.position.x, pl.position.z - dog.position.z) < 4.5) near(8); });
+    const hb = dog.health, r = dog.hit(1, new THREE.Vector3(0, 0, 1), 'nut');
+    check('bulldog charges and shrugs off a nut while charging', ch && r === false && dog.health === hb);
+    pl.invulnerable = false; const b3 = bites; until(() => dog.state !== 'charge', 200);
+    check('charge hits a still squirrel for 2', bites > b3, { bites: bites - b3 });
+    pl.invulnerable = true; until(() => dog.state === 'chase', 300); near(3);
+  }
   // 6. nut interrupts a wind-up
   until(() => dog.state === 'windup', 900); step(6);
   const h0 = dog.health; dog.hit(1, new THREE.Vector3(-Math.sin(dog.yaw), 0, -Math.cos(dog.yaw)), 'nut');
@@ -164,7 +186,7 @@ async function runTest(kind = 'terrier') {
   check('nut stagger lasts 0.6 s', Math.abs(time - ts - 0.6) < 0.05, { stagger: +(time - ts).toFixed(2) });
   // 7. treeing: squirrel on top of the 3 m trunk
   dog.health = dog.maxHealth;
-  pl.script.mode = 'trunk'; pl.script.y = 3; const e0 = events.length; t0 = time;
+  pl.script.mode = 'trunk'; pl.script.y = 3; pl.script.ox = pl.script.oz = 0; const e0 = events.length; t0 = time;
   const treed = until(() => dog.state === 'tree', 900);
   step(360);
   const barks = events.slice(e0).filter((e) => e.type === 'bark').length;
@@ -172,12 +194,14 @@ async function runTest(kind = 'terrier') {
   check('barks in rhythm while treeing', barks >= 6, { barks });
   check('rears up against the trunk', dog.model.s.rear > 0.8);
   // low on the trunk within reach: snaps up and bites
+  { const ax = dog.position.x - 2.5, az = dog.position.z - 3.5, al = Math.hypot(ax, az); pl.script.ox = (ax / al) * 0.36; pl.script.oz = (az / al) * 0.36; } // on the side of the trunk facing the dog
   pl.invulnerable = false; pl.script.y = Math.max(1.45, 1.5 * dog.shoulder - 0.08); const b1 = bites;
   const canReach = 1.5 * dog.shoulder > 1.45;
   until(() => bites > b1, 600);
   check(canReach ? 'snaps up to about 1.5 shoulder heights and bites' : 'cannot reach a squirrel above 1.5 shoulder heights', (bites > b1) === canReach, { at: +pl.script.y.toFixed(2), state: dog.state });
   pl.script.y = 1.5 * dog.shoulder + 0.4; const b2 = bites; step(420);
-  check('squirrel just above reach is safe', bites === b2, { at: +pl.script.y.toFixed(2) });
+  check('squirrel just above reach is safe', bites === b2, { at: +pl.script.y.toFixed(2), mouthY: +(dog.mouthPosition.y - dog.position.y).toFixed(2) });
+  pl.script.ox = pl.script.oz = 0;
   pl.invulnerable = true;
   // squirrel climbs above 9 m: the dog gives up
   pl.script.y = 10; const gave = until(() => dog.state === 'return', 300);
@@ -185,13 +209,13 @@ async function runTest(kind = 'terrier') {
   until(() => dog.state === 'patrol', 1200);
   check('walks back to patrol', dog.state === 'patrol');
   // 8. leash: squirrel runs away in a straight line at 8 m/s
-  front(5); until(() => dog.state === 'chase', 400, () => { if (dog.state === 'patrol') front(5); });
+  near(4.5); until(() => dog.state === 'chase', 400, () => { if (dog.state === 'patrol') near(4.5); });
   pl.script.mode = 'run'; const a = Math.atan2(pl.position.x, pl.position.z); pl.script.vx = Math.sin(a) * 8; pl.script.vz = Math.cos(a) * 8; maxZone = 0;
   const ret = until(() => dog.state === 'return', 900);
   check('gives up the chase near 1.5 times the zone radius', ret && maxZone < zone.radius * 1.5 + 1.5, { maxDistFromZone: +maxZone.toFixed(2) });
   until(() => dog.state === 'patrol', 1500);
   // 9. pounce stuns for 2 s, scratch knocks back, beaten dog yelps and flees, then returns calm
-  front(5); pl.script.mode = 'still'; until(() => dog.state === 'chase', 400, () => { if (dog.state === 'patrol') front(5); });
+  near(4.5); until(() => dog.state === 'chase', 400, () => { if (dog.state === 'patrol') near(4.5); });
   dog.health = dog.maxHealth;
   if (dog.maxHealth > 2) {
     dog.hit(2, new THREE.Vector3(0, -1, 0), 'pounce'); const t1 = time;
@@ -244,6 +268,10 @@ function placeCamera() {
   else if (camMode === 'dog') a = yaw + 0.9;
   else if (camMode === 'low') { a = yaw + 0.35; h = 0.25; d = cd || S * 3.2; }
   else if (camMode === 'top') { h = d * 1.6; a = 0; }
+  else if (camMode === 'head' && follow.userData.model) {
+    const m = follow.userData.model, hl = m.headTopLocal, cy = Math.cos(yaw), sy = Math.sin(yaw);
+    look.set(t.x + hl.x * cy + hl.z * sy, t.y + hl.y - 0.16 * S, t.z - hl.x * sy + hl.z * cy); d = cd || S * 1.7; a = yaw + 0.55; h = look.y - t.y + 0.05 * S;
+  }
   else if (camMode === 'wide') { look.set(0, 1, 0); d = cd || 22; h = 9; a = 0.5; }
   a += ca; h += chh;
   camera.position.set(look.x + Math.sin(a) * d, (camMode === 'wide' ? 0 : t.y) + h, look.z + Math.cos(a) * d);
@@ -260,13 +288,13 @@ if (mode === 'pose') {
   const pose = q.get('pose') || 'stand';
   const dogs = kinds.map((k, i) => {
     const m = new DogModel(k, 3 + i); m.ground = flat ? () => 0 : groundFn;
-    m.group.position.set((i - (kinds.length - 1) / 2) * 2.2, 0, 0); m.group.userData.S = m.d.S;
+    m.group.position.set((i - (kinds.length - 1) / 2) * 2.2, 0, 0); m.group.userData.S = m.d.S; m.group.userData.model = m;
     const sig = createSignals(m.d.S, KINDS[k].health); m.group.add(sig.group);
     scene.add(m.group);
     return { m, sig, k };
   });
   follow = dogs[Math.floor(dogs.length / 2)].m.group;
-  marker.position.set(dogs[dogs.length - 1].m.group.position.x + 1.3, 0, 1.2);
+  marker.position.set(dogs[dogs.length - 1].m.group.position.x - 1.6, 0, num('mz', 1.6));
   const P = {
     stand: {}, walk: { v: 0.2 }, trot: { v: 0.42 }, gallop: { v: 1 }, turn: { v: 0.75, turn: 2.6 }, sit: { sit: 1, pant: 0.8 }, lie: { lie: 1 }, sniff: { sniff: 1 },
     growl: { growl: 1, hackle: 1 }, bark: { alert: 1, bark: 1 }, windup: { crouch: 1, hackle: 1 }, lunge: { leap: 1, hackle: 1, vabs: 10 }, skid: { skid: 1, pant: 0.5 },
@@ -309,7 +337,7 @@ if (mode === 'pose') {
   pl.invulnerable = q.get('inv') === '1'; pl.hidden = q.get('hidden') === '1';
   const evlog = [];
   const ctx = { time: 0, player: pl, camera, onEvent: (type, dog, data) => { evlog.push(simTime.toFixed(2) + ' ' + dog.name + ' ' + type + (data && data.damage ? ' dmg ' + data.damage : '')); if (evlog.length > 7) evlog.shift(); } };
-  for (const d of sys.list) d.group.userData.S = d.shoulder;
+  for (const d of sys.list) { d.group.userData.S = d.shoulder; d.group.userData.model = d.model; }
   follow = sys.list[num('f', 0)].group;
   stepFn = () => {
     stepPlayer(pl, DT, world);

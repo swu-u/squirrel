@@ -80,7 +80,7 @@ export class FollowCamera {
     // keep the camera out of solid things
     const hit = this.world.raycast(this.target, _d, want + 0.3, 0.25, 0.12);
     let allowed = want;
-    if (hit < want + 0.3) allowed = Math.max(0.55, hit - 0.3);
+    if (hit < want + 0.3) allowed = Math.max(0.95, hit - 0.3);
     if (allowed < this.curDist) this.curDist += (allowed - this.curDist) * Math.min(1, dt * 22);
     else this.curDist += (allowed - this.curDist) * Math.min(1, dt * 3.5);
     _c.copy(this.target).addScaledVector(_d, this.curDist);
