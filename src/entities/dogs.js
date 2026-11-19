@@ -161,7 +161,7 @@ export function createDogs(scene, world, zones, opts = {}) {
       senseT: rng() * 0.2, sees: false, lostT: 0, lastX: 0, lastZ: 0, ignoreT: 0, calmT: 0,
       lungeCd: 0, ldx: 0, ldz: 1, lungeDist: 2.5, lungeDur: 0.24, bit: false, dur: 0, chargeCd: 3 + rng() * 2, charged: false,
       barkT: 0, barkN: 0, noLosT: 0, losT: 0, treeT: 0, snapT: 1, snapCheck: -1, stuckT: 0, stuckX: 0, stuckZ: 0, fade: 1, lodAcc: 0, respawnT: 0,
-      fleeX: 0, fleeZ: 1,
+      fleeX: 0, fleeZ: 1, crowdT: 0, reach: Math.hypot(model.b.mouthRest.x, model.b.mouthRest.z),
       hit: (damage, dir, hitKind) => hitDog(dog, damage, dir, hitKind),
     };
     findFree(dog, zone.center.x + (index ? 1.5 : 0), zone.center.z + (index ? 1.0 : 0), Math.min(zone.radius * 0.5, 4));
@@ -216,10 +216,21 @@ export function createDogs(scene, world, zones, opts = {}) {
     _d.multiplyScalar(1 / l);
     return world.raycast(_o, _d, l) > l - 0.9;
   }
-  function tryBite(dog, pl, reach) {
+  /** sweep = true: ground attack. Bites when the squirrel is within `reach` (horizontally) of the line from the
+   *  dog's chest to its mouth, which sweeps along the whole lunge path, and no higher than 1.5 shoulder heights.
+   *  sweep = false: snapping upwards, plain distance from the mouth. */
+  function tryBite(dog, pl, reach, sweep) {
     if (dog.bit || pl.invulnerable) return false;
-    const m = dog.mouthPosition, p = pl.position;
-    const d = Math.hypot(m.x - p.x, m.y - (p.y + 0.12), m.z - p.z);
+    const m = dog.mouthPosition, p = pl.position, c = dog.position;
+    let d;
+    if (sweep) {
+      const dy = p.y - c.y;
+      if (dy > dog.shoulder * 1.5 || dy < -1) return false;
+      // the mouth position lags one frame behind the body, so extend the segment a little past it
+      const ex = m.x - c.x + Math.sin(dog.yaw) * 0.25, ez = m.z - c.z + Math.cos(dog.yaw) * 0.25;
+      const t = sat(((p.x - c.x) * ex + (p.z - c.z) * ez) / (ex * ex + ez * ez || 1));
+      d = Math.hypot(p.x - (c.x + ex * t), p.z - (c.z + ez * t));
+    } else d = Math.hypot(m.x - p.x, m.y - (p.y + 0.12), m.z - p.z);
     if (d > reach) return false;
     dog.bit = true;
     let bx = p.x - dog.position.x, bz = p.z - dog.position.z; const l = Math.hypot(bx, bz) || 1;
@@ -306,8 +317,16 @@ export function createDogs(scene, world, zones, opts = {}) {
       const tx = pl.hidden ? dog.lastX : pl.position.x, tz = pl.hidden ? dog.lastZ : pl.position.z;
       const td = Math.hypot(tx - p.x, tz - p.z);
       const facing = Math.abs(angDiff(Math.atan2(dx, dz), dog.yaw));
-      const left = moveToward(dog, tx, tz, dog.maxSpeed, dt, high ? 0.9 : dog.radius + 0.25);
-      if (left < (high ? 0.9 : dog.radius + 0.25) && dist > 0.05) turnToward(dog, Math.atan2(dx, dz), cfg.turn, dt);
+      // keep about a metre between the nose and the squirrel: stop short, and back off if it is underfoot
+      const keep = high ? 0.9 : dog.reach + 1.0;
+      if (!high && !pl.hidden && dist < keep - 0.35) {
+        if (dist > 0.05) turnToward(dog, Math.atan2(dx, dz), cfg.turn, dt);
+        dog.speed += clamp(-3.2 - dog.speed, -30 * dt, 30 * dt); advance(dog, dt);
+        dog.crowdT += dt;
+      } else {
+        const left = moveToward(dog, tx, tz, dog.maxSpeed, dt, keep);
+        if (left < keep) { dog.crowdT = 0; if (dist > 0.05) turnToward(dog, Math.atan2(dx, dz), cfg.turn, dt); }
+      }
       dog.barkT -= dt;
       if (dog.barkT <= 0) { dog.barkT = 1.1 + rng() * 1.2; doBark(dog); }
       // stuck against something for a while: give up
@@ -319,7 +338,7 @@ export function createDogs(scene, world, zones, opts = {}) {
       } else if (!pl.hidden) {
         if (cfg.charge && dog.chargeCd <= 0 && dist > 5 && dist < 10 && facing < 0.3 && lineFree(dog, p.x, p.z, p.x + (dx / dist) * (dist - 0.8), p.z + (dz / dist) * (dist - 0.8))) {
           setState(dog, 'chargeWindup'); emit('growl', dog, { charge: true });
-        } else if (dist < cfg.lungeRange && dog.lungeCd <= 0 && facing < (dist < 1.2 ? 1.3 : 0.6)) { setState(dog, 'windup'); emit('growl', dog, null); }
+        } else if (dist < cfg.lungeRange && dog.lungeCd <= 0 && facing < 0.6 && (dist > keep - 0.45 || dog.crowdT > 1.0)) { setState(dog, 'windup'); emit('growl', dog, null); }
       }
     } else if (st === 'windup') {
       c.crouch = 1; c.hackle = 1; lookAtPlayer();
@@ -329,7 +348,7 @@ export function createDogs(scene, world, zones, opts = {}) {
         // commit: direction and length are fixed now, the squirrel can still dodge sideways
         const lx = dx + pl.velocity.x * 0.08, lz = dz + pl.velocity.z * 0.08, l = Math.hypot(lx, lz) || 1;
         dog.ldx = lx / l; dog.ldz = lz / l; dog.yaw = Math.atan2(dog.ldx, dog.ldz);
-        dog.lungeDist = clamp(dist - K.L * K.S * 0.2 + 0.3, cfg.lungeMin, cfg.lungeMax); dog.lungeDur = 0.24; dog.bit = false;
+        dog.lungeDist = clamp(dist - dog.reach + 0.9, cfg.lungeMin, cfg.lungeMax); dog.crowdT = 0; dog.lungeDur = 0.24; dog.bit = false;
         setState(dog, 'lunge'); emit('lunge', dog, null);
       }
     } else if (st === 'lunge') {
@@ -337,7 +356,7 @@ export function createDogs(scene, world, zones, opts = {}) {
       c.leap = 1; c.leapT = tt; c.hackle = 1; lookAtPlayer();
       const v = (dog.lungeDist / dog.lungeDur) * (Math.PI / 2) * Math.sin(Math.PI * tt);
       dog.speed = v; dog.turnRate = 0; advance(dog, dt);
-      if (tt > 0.2 && hag < S * 1.5) tryBite(dog, pl, BITE_R);
+      if (tt > 0.12) tryBite(dog, pl, 0.6, true);
       if (tt >= 1 || (dog.blocked && dog.realSpeed < 1)) { dog.dur = cfg.recover; dog.speed = Math.min(dog.speed, 4.5); setState(dog, 'recover'); }
     } else if (st === 'recover') {
       const tt = dog.stateTime;
@@ -354,7 +373,7 @@ export function createDogs(scene, world, zones, opts = {}) {
       // a charging bulldog barely steers
       turnToward(dog, Math.atan2(dx, dz), 0.7, dt);
       dog.speed += clamp(cfg.charge - dog.speed, -20 * dt, 40 * dt); advance(dog, dt);
-      if (hag < S * 1.1) { if (tryBite(dog, pl, BITE_R + 0.25)) dog.stateTime = Math.max(dog.stateTime, dog.dur - 0.12); }
+      if (tryBite(dog, pl, 0.75, true)) dog.stateTime = Math.max(dog.stateTime, dog.dur - 0.12);
       if (dog.blocked && dog.realSpeed < 3 && dog.stateTime > 0.15) { // ran into something solid: dazed
         dog.model.squash(0.5); dog.speed = 0; dog.kvx = -dog.ldx * 3; dog.kvz = -dog.ldz * 3; dog.dur = 1.3; dog.chargeCd = 6; setState(dog, 'stunned'); emit('hurt', dog, { kind: 'bonk', damage: 0 });
       } else if (dog.stateTime >= dog.dur) { dog.dur = 1.25; dog.chargeCd = 6 + rng() * 3; setState(dog, 'recover'); }
@@ -379,7 +398,7 @@ export function createDogs(scene, world, zones, opts = {}) {
           if (dog.snapT <= 0 && hag < S * 1.5 + 0.5 && dist < 1.8) { dog.snapT = 1.2 + rng() * 0.6; dog.snapCheck = 0.3; dog.bit = false; dog.model.hop(0.3); emit('lunge', dog, { up: true }); }
         }
       }
-      if (dog.snapCheck > 0) { dog.snapCheck -= dt; c.jaw = 0.8; if (dog.snapCheck < 0.22 && hag < S * 1.5 + 0.05) tryBite(dog, pl, BITE_R + 0.1); }
+      if (dog.snapCheck > 0) { dog.snapCheck -= dt; c.jaw = 0.8; if (dog.snapCheck < 0.22 && hag < S * 1.5 + 0.05) tryBite(dog, pl, BITE_R + 0.1, false); }
       // bark in bursts: woof woof (woof) ... pause
       dog.barkT -= dt;
       if (dog.barkT <= 0 && dog.snapCheck <= 0) {

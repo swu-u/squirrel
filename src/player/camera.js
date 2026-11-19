@@ -74,7 +74,7 @@ export class FollowCamera {
     if (this.target.distanceToSquared(_t) > 9) this.target.copy(_t);
 
     const portrait = aspect < 1;
-    let want = this.dist * (portrait ? 0.92 : 1) * (1 - 0.14 * player.alert) + clamp(player.speed - 8, 0, 5) * 0.12;
+    let want = this.dist * (portrait ? 0.92 : 1) * (1 - 0.14 * player.alert) + clamp(player.speed - 8, 0, 5) * 0.12 + steep * 0.7;
     const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
     _d.set(Math.sin(this.yaw) * cp, sp, Math.cos(this.yaw) * cp); // from target toward camera
     // keep the camera out of solid things

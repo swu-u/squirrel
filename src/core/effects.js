@@ -106,7 +106,7 @@ export function createEffects(scene) {
     },
     ping(pos) { spawn({ x: pos.x, y: pos.y + 0.15, z: pos.z, life: 0.9, size: 0.2, size2: 1.1, r: 1, g: 0.85, b: 0.4, a: 0.8, tex: 0, add: 1 }); spawn({ x: pos.x, y: pos.y + 0.15, z: pos.z, vy: 0.6, life: 1.1, size: 0.3, size2: 0, r: 1, g: 0.9, b: 0.5, tex: 2, add: 1, spin: 2 }); },
     streak(pos, vel) {
-      spawn({ x: pos.x + rnd(-0.5, 0.5), y: pos.y + rnd(0.05, 0.6), z: pos.z + rnd(-0.5, 0.5), vx: -vel.x * 0.3, vy: -vel.y * 0.3, vz: -vel.z * 0.3, life: 0.25, size: 0.5, size2: 0.2, a: 0.5, tex: 3, stretch: 2.2, add: 1, rot: rnd(-0.2, 0.2) });
+      spawn({ x: pos.x + rnd(-0.5, 0.5), y: pos.y + rnd(0.05, 0.6), z: pos.z + rnd(-0.5, 0.5), vx: -vel.x * 0.3, vy: -vel.y * 0.3, vz: -vel.z * 0.3, life: 0.22, size: 0.28, size2: 0.12, a: 0.3, tex: 3, stretch: 3, add: 1, rot: rnd(-0.2, 0.2) });
     },
     hit(pos) {
       for (let i = 0; i < 7; i++) spawn({ x: pos.x, y: pos.y, z: pos.z, vx: rnd(-3.5, 3.5), vy: rnd(1, 4.5), vz: rnd(-3.5, 3.5), life: 0.5, size: 0.3, size2: 0, r: 1, g: 0.95, b: 0.6, tex: 2, grav: 5, rot: rnd(0, 6), spin: rnd(-8, 8), add: 1 });

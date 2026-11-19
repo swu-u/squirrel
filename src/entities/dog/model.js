@@ -319,9 +319,9 @@ export class DogModel {
     const ly = this.lookYaw + Math.sin(t * 2.4) * 0.5 * s.stun + this.bend * 0.6 + Math.sin(t * 5) * 0.25 * s.sniff + this.flX * 0.5 + Math.sin(t * 24) * 0.5 * s.shake;
     const lpch = this.lookPitch;
     const snf = s.sniff * (1 + 0.06 * Math.sin(t * 11));
-    const neckP = snf * 1.15 + s.growl * 0.55 + s.crouch * 0.5 + s.fear * 0.35 + s.stun * 0.4 - s.alert * 0.14 - bp * 0.2 + s.lie * 0.15 + gal * 0.3 + trot * 0.1
+    const neckP = snf * 1.15 + s.growl * 0.55 + s.crouch * 0.5 + s.fear * 0.35 + s.stun * 0.4 - s.alert * 0.1 - bp * 0.12 + s.lie * 0.15 + gal * 0.3 + trot * 0.1
       - flex * 0.08 + s.skid * 0.3 + Math.max(sq, 0) * 0.5 - this.flZ * 0.25 - lpch * 0.4 + s.sit * 0.1 - s.rear * 0.25;
-    const headP = -snf * 0.35 - s.growl * 0.45 - s.crouch * 0.45 + s.stun * 0.25 - bp * 0.22 - gal * 0.25 - s.skid * 0.1 - lpch * 0.6 - this.flZ * 0.3 - s.lie * 0.1;
+    const headP = -snf * 0.35 - s.growl * 0.45 - s.crouch * 0.45 + s.stun * 0.25 - bp * 0.12 - gal * 0.25 - s.skid * 0.1 - lpch * 0.6 - this.flZ * 0.3 - s.lie * 0.1;
     const headRoll = Math.cos(t * 2.4) * 0.35 * s.stun + this.idleRoll * idleW + this.flX * 0.3 - this.roll * 0.5 + Math.sin(t * 24 + 1) * 0.3 * s.shake;
     qe(_q, neckP, ly * 0.45, 0);
     this._attach(B.neck, chestB, Rst.neck, Rst.chest, _q);

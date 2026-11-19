@@ -164,8 +164,15 @@ async function runTest(kind = 'terrier') {
   check('recover opening is about 0.9 s', Math.abs(te - tr - (kind === 'bulldog' ? 1.0 : 0.9)) < 0.08, { recover: +(te - tr).toFixed(2) });
   check('no bite while invulnerable', bites === 0);
   // 5. vulnerable squirrel standing still gets bitten
-  pl.invulnerable = false; const b0 = bites;
+  pl.invulnerable = false; const b0 = bites, l0 = events.filter((e) => e.type === 'lunge').length;
   until(() => bites > b0, 900);
+  { // reliability: every lunge at a squirrel that stands still must connect, and the dog keeps its distance in between
+    let minD = 9; const bA = bites, lA = events.filter((e) => e.type === 'lunge').length;
+    step(900, () => { if (dog.state === 'chase' && dog.stateTime > 0.8) minD = Math.min(minD, Math.hypot(pl.position.x - dog.position.x, pl.position.z - dog.position.z)); });
+    const lunges = events.filter((e) => e.type === 'lunge' && !e.data).length - lA + 0, nb = bites - bA;
+    check('every lunge at a still squirrel bites', nb >= 3 && nb >= events.filter((e) => e.type === 'lunge').length - lA - 1, { bites: nb, lunges: events.filter((e) => e.type === 'lunge').length - lA });
+    check('keeps about 1 m of spacing between lunges', minD > dog.reach + 0.45, { minChestDist: +minD.toFixed(2), noseReach: +dog.reach.toFixed(2) });
+  }
   const be = events.filter((e) => e.type === 'bite').pop();
   check('bite connects on a still squirrel', bites > b0 && be && be.data.damage === (kind === 'bulldog' ? 2 : 1), be);
   pl.invulnerable = true;
